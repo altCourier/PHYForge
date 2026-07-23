@@ -49,14 +49,16 @@ class Constellation:
     Wraps sionna.phy.mapping.Constellation. Given a ThzModulation, looks up
     how to construct it via THZ_MODULATION_REGISTRY, then instantiates
     Sionna's own Constellation class with those args. No custom math lives
-    here -- only dispatch + the point tensors registered above.
+    here only dispatch + the point tensors registered above.
     """
 
     def __init__(
+            
         self,
         modulation: str,
         precision: Optional[Precision] = None,
         device: Optional[str] = None,
+        
     ) -> None:
 
         mtype = ThzModulation(modulation)
