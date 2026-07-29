@@ -26,11 +26,37 @@ from sionna.phy.ofdm import ResourceGrid
 
 from .schema import (
     Config,
+    CommonConfig,
     AWGNChannelConfig,
     TDLChannelConfig,
     SystemLevelChannelConfig,
     RayleighBlockFadingConfig,
 )
+
+
+def _pd_kwargs(local_config, common: CommonConfig) -> dict:
+    """
+    Resolve precision/device for a single block: the block's own value
+    if it set one (non-null), otherwise common's global default.
+    Returns a kwargs dict with only the keys that ended up non-None, so
+    callers can blindly do kwargs.update(_pd_kwargs(...)) and let Sionna
+    fall back to ITS OWN default when neither local nor common set one.
+
+    This is the only place this inheritance rule is implemented -- see
+    ARCHITECTURE.md's "code is the decider, not the config" and
+    "no duplicated shapes" principles.
+    """
+
+    precision = local_config.precision if local_config.precision is not None else common.precision
+    device = local_config.device if local_config.device is not None else common.device
+
+    kwargs = {}
+    if precision is not None:
+        kwargs["precision"] = precision
+    if device is not None:
+        kwargs["device"] = device
+
+    return kwargs
 
 
 def _active_channel_config(config: Config):
@@ -43,13 +69,11 @@ def _active_channel_config(config: Config):
 def build_channel(config: Config):
 
     channel_config = _active_channel_config(config)
+    common = config.common
 
     if isinstance(channel_config, AWGNChannelConfig):
 
-        kwargs = {}
-
-        if channel_config.precision is not None:
-            kwargs["precision"] = channel_config.precision
+        kwargs = _pd_kwargs(channel_config, common)
 
         return AWGN(**kwargs)
 
@@ -70,8 +94,7 @@ def build_channel(config: Config):
             tx_corr_mat = channel_config.tx_corr_mat,
         )
 
-        if channel_config.precision is not None:
-            kwargs["precision"] = channel_config.precision
+        kwargs.update(_pd_kwargs(channel_config, common))
 
         return TDL(**kwargs)
 
@@ -101,7 +124,7 @@ def build_channel(config: Config):
             carrier_frequency = channel_config.carrier_frequency,
         )
 
-        return variant_cls(
+        kwargs = dict(
             carrier_frequency = channel_config.carrier_frequency,
             o2i_model = channel_config.o2i_model,
             ut_array = ut_array,
@@ -110,24 +133,27 @@ def build_channel(config: Config):
             enable_pathloss = channel_config.enable_pathloss,
             enable_shadow_fading = channel_config.enable_shadow_fading,
         )
-    
-        # NOTE: gen_single_sector_topology (per ARCHITECTURE.md) still
+        kwargs.update(_pd_kwargs(channel_config, common))
+
+        # TODO: gen_single_sector_topology (per ARCHITECTURE.md) still
         # needs to be called and its output fed to
         # variant_instance.set_topology(...) before this channel is
-        # usable
-        # that's a runtime concern (topology may change per
-        # batch), so it likely belongs in runtime.py, not here. Flagging
-        # this as a TODO for now.
+        # usable. That's a runtime concern (topology may change per
+        # batch), so it likely belongs in runtime.py, not here.
+        return variant_cls(**kwargs)
 
     if isinstance(channel_config, RayleighBlockFadingConfig):
 
-        return RayleighBlockFading(
+        kwargs = dict(
             num_rx = channel_config.num_rx,
             num_tx = channel_config.num_tx,
-
             num_rx_ant = channel_config.num_rx_ant,
             num_tx_ant = channel_config.num_tx_ant,
         )
+
+        kwargs.update(_pd_kwargs(channel_config, common))
+
+        return RayleighBlockFading(**kwargs)
 
     raise ValueError(f"No builder for channel config type: {type(channel_config)!r}")
 
@@ -166,11 +192,12 @@ def build_mapsys(config: Config):
 def build_waveform(config: Config, channel_model):
     """
     Wraps a raw channel_model (from build_channel) according to
-    common.
-    active_waveform. 
-    This is the ONLY place TimeChannel/
-    OFDMChannel wrapping happens -- build_channel never wraps.
+    common.active_waveform.
+    This is the ONLY place TimeChannel/OFDMChannel wrapping happens --
+    build_channel never wraps.
     """
+
+    common = config.common
 
     if config.common.active_waveform == "time":
 
@@ -180,7 +207,7 @@ def build_waveform(config: Config, channel_model):
             # AWGN has no notion of a time-domain filter tail --
             # it's applied directly, no TimeChannel wrapping at all.
             return channel_model
-        
+
         kwargs = dict(
             channel_model = channel_model,
             bandwidth = wf.bandwidth,
@@ -191,12 +218,15 @@ def build_waveform(config: Config, channel_model):
             normalize_channel = wf.normalize_channel,
             return_channel = wf.return_channel,
         )
-        if wf.precision is not None:
-            kwargs["precision"] = wf.precision
+        kwargs.update(_pd_kwargs(wf, common))
 
         return TimeChannel(**kwargs)
 
     if config.common.active_waveform == "ofdm":
+
+        # Check the early-exit case FIRST
+        if isinstance(channel_model, AWGN):
+            return channel_model
 
         rg_cfg = config.waveforms.ofdm.resource_grid
 
@@ -213,13 +243,9 @@ def build_waveform(config: Config, channel_model):
             pilot_ofdm_symbol_indices = rg_cfg.pilot_ofdm_symbol_indices,
         )
 
-        if rg_cfg.precision is not None:
-            rg_kwargs["precision"] = rg_cfg.precision
+        rg_kwargs.update(_pd_kwargs(rg_cfg, common))
 
         resource_grid = ResourceGrid(**rg_kwargs)
-
-        if isinstance(channel_model, AWGN):
-            return channel_model
 
         ofdm_cfg = config.waveforms.ofdm
 
@@ -229,8 +255,8 @@ def build_waveform(config: Config, channel_model):
             normalize_channel = ofdm_cfg.normalize_channel,
             return_channel = ofdm_cfg.return_channel,
         )
-        if ofdm_cfg.precision is not None:
-            ofdm_kwargs["precision"] = ofdm_cfg.precision
+
+        ofdm_kwargs.update(_pd_kwargs(ofdm_cfg, common))
 
         return OFDMChannel(**ofdm_kwargs)
 
