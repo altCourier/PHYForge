@@ -40,5 +40,5 @@ def load_config(pathname: Union[str, Path]) -> Config:
 
     try:
         return parse_config(raw)
-    except (ValueError, KeyError) as exc:
+    except (ValueError, KeyError, TypeError) as exc:
         raise ConfigLoadError(f"Config file {path} failed validation: {exc}") from exc
