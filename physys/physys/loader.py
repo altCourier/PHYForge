@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Union
 
-from schema import parse_config, Config
+from .schema import parse_config, Config
 
 class ConfigLoadError(Exception):
     """Raised when a config file can't be found, read, parsed as JSON,
