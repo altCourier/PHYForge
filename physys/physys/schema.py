@@ -75,6 +75,15 @@ class TDLChannelConfig:
         if self.type != "tdl":
             raise ValueError(f"TdlChannelConfig.type must be 'tdl', got {self.type!r}")
 
+        required = ("model", "delay_spread", "carrier_frequency", "bandwidth")
+
+        missing = [name for name in required if getattr(self, name) is None]
+        
+        if missing:
+            raise ValueError(
+                f"TDLChannelConfig missing required field(s): {', '.join(missing)}"
+            )
+
 # --- initiating ---
 
 SourceConfig = Union[BinarySourceConfig]
