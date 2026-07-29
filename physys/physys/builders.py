@@ -1,84 +1,237 @@
 """
 builders.py
 
-Consumes validated schema objects (from schema.py) and constructs
-live Sionna objects from them. This file is allowed to import
-sionna/torch freely — schema.py deliberately is not.
+Consumes a validated Config (from schema.py, via loader.py) and
+constructs live Sionna objects from it. This file is allowed to import
+sionna/torch freely -- schema.py deliberately is not.
 
-Every build_* function for a given section returns objects with a
-common interface, so runtime.py never branches on config.type itself.
+Split of responsibility:
+- build_channel(config) returns the raw Sionna ChannelModel (AWGN, TDL,
+  or a system-level UMi/UMa/RMa instance) -- NEVER wrapped in
+  TimeChannel/OFDMChannel. That wrapping is build_waveform's job.
+- build_waveform(config) takes that raw channel model and wraps it
+  according to common.active_waveform.
 """
+
+import dataclasses
 
 import sionna.phy
 
-from schema import SourceConfig, ModulationConfig, ChannelConfig, TDLChannelConfig, AWGNChannelConfig
+from sionna.phy.channel import AWGN, RayleighBlockFading, TimeChannel, OFDMChannel
+from sionna.phy.channel.tr38901 import TDL, UMa, UMi, RMa, PanelArray
+
+from sionna.phy.mapping import BinarySource, Constellation, Mapper, Demapper
+
+from sionna.phy.ofdm import ResourceGrid
+
+from .schema import (
+    Config,
+    AWGNChannelConfig,
+    TDLChannelConfig,
+    SystemLevelChannelConfig,
+    RayleighBlockFadingConfig,
+)
 
 
-class ChannelHandle:
+def _active_channel_config(config: Config):
     """
-    Common interface every channel branch returns, so runtime.py
-    can call any channel the same way regardless of type.
+    Look up the one channels block that's actually live for this run.
+    """
+    return getattr(config.channels, config.common.active_channel)
+
+
+def build_channel(config: Config):
+
+    channel_config = _active_channel_config(config)
+
+    if isinstance(channel_config, AWGNChannelConfig):
+
+        kwargs = {}
+
+        if channel_config.precision is not None:
+            kwargs["precision"] = channel_config.precision
+
+        return AWGN(**kwargs)
+
+    if isinstance(channel_config, TDLChannelConfig):
+
+        kwargs = dict(
+            model = channel_config.model,
+            delay_spread = channel_config.delay_spread,
+            carrier_frequency = channel_config.carrier_frequency,
+            num_sinusoids = channel_config.num_sinusoids,
+            los_angle_of_arrival = channel_config.los_angle_of_arrival,
+            min_speed = channel_config.min_speed,
+            max_speed = channel_config.max_speed,
+            num_rx_ant = channel_config.num_rx_ant,
+            num_tx_ant = channel_config.num_tx_ant,
+            spatial_corr_mat = channel_config.spatial_corr_mat,
+            rx_corr_mat = channel_config.rx_corr_mat,
+            tx_corr_mat = channel_config.tx_corr_mat,
+        )
+
+        if channel_config.precision is not None:
+            kwargs["precision"] = channel_config.precision
+
+        return TDL(**kwargs)
+
+    if isinstance(channel_config, SystemLevelChannelConfig):
+
+        variant_cls = {
+            "umi": UMi,
+            "uma": UMa,
+            "rma": RMa,
+        }[channel_config.variant]
+
+        bs_array = PanelArray(
+            num_rows_per_panel = channel_config.bs_array.num_rows_per_panel,
+            num_cols_per_panel = channel_config.bs_array.num_cols_per_panel,
+            polarization = channel_config.bs_array.polarization,
+            polarization_type = channel_config.bs_array.polarization_type,
+            antenna_pattern = channel_config.bs_array.antenna_pattern,
+            carrier_frequency = channel_config.carrier_frequency,
+        )
+
+        ut_array = PanelArray(
+            num_rows_per_panel = channel_config.ut_array.num_rows_per_panel,
+            num_cols_per_panel = channel_config.ut_array.num_cols_per_panel,
+            polarization = channel_config.ut_array.polarization,
+            polarization_type = channel_config.ut_array.polarization_type,
+            antenna_pattern = channel_config.ut_array.antenna_pattern,
+            carrier_frequency = channel_config.carrier_frequency,
+        )
+
+        return variant_cls(
+            carrier_frequency = channel_config.carrier_frequency,
+            o2i_model = channel_config.o2i_model,
+            ut_array = ut_array,
+            bs_array = bs_array,
+            direction = channel_config.direction,
+            enable_pathloss = channel_config.enable_pathloss,
+            enable_shadow_fading = channel_config.enable_shadow_fading,
+        )
+    
+        # NOTE: gen_single_sector_topology (per ARCHITECTURE.md) still
+        # needs to be called and its output fed to
+        # variant_instance.set_topology(...) before this channel is
+        # usable
+        # that's a runtime concern (topology may change per
+        # batch), so it likely belongs in runtime.py, not here. Flagging
+        # this as a TODO for now.
+
+    if isinstance(channel_config, RayleighBlockFadingConfig):
+
+        return RayleighBlockFading(
+            num_rx = channel_config.num_rx,
+            num_tx = channel_config.num_tx,
+
+            num_rx_ant = channel_config.num_rx_ant,
+            num_tx_ant = channel_config.num_tx_ant,
+        )
+
+    raise ValueError(f"No builder for channel config type: {type(channel_config)!r}")
+
+
+def build_source(config: Config):
+    # Only "binary" exists right now
+    return BinarySource()
+
+
+def build_mapsys(config: Config):
+
+    mod = config.modulation
+
+    constellation = Constellation(
+        mod.type,
+        mod.num_bits_per_symbol,
+        normalize = mod.constellation.normalize,
+        center = mod.constellation.center,
+        points = mod.constellation.points,
+    )
+
+    mapper = Mapper(
+        constellation = constellation,
+        return_indices = mod.mapper.return_indices,
+    )
+
+    demapper = Demapper(
+        mod.demapper.demapping_method,
+        constellation = constellation,
+        hard_out = mod.demapper.hard_out,
+    )
+
+    return constellation, mapper, demapper
+
+
+def build_waveform(config: Config, channel_model):
+    """
+    Wraps a raw channel_model (from build_channel) according to
+    common.
+    active_waveform. 
+    This is the ONLY place TimeChannel/
+    OFDMChannel wrapping happens -- build_channel never wraps.
     """
 
-    def __call__(self, x, no):
-        raise NotImplementedError
+    if config.common.active_waveform == "time":
 
+        wf = config.waveforms.time
 
-class AWGNChannelHandle(ChannelHandle):
-    def __init__(self):
-        # TODO: instantiate sionna.phy.channel.AWGN
-
+        if isinstance(channel_model, AWGN):
+            # AWGN has no notion of a time-domain filter tail --
+            # it's applied directly, no TimeChannel wrapping at all.
+            return channel_model
         
+        kwargs = dict(
+            channel_model = channel_model,
+            bandwidth = wf.bandwidth,
+            num_time_samples = wf.num_time_samples,
+            maximum_delay_spread = wf.maximum_delay_spread,
+            l_min = wf.l_min,
+            l_max = wf.l_max,
+            normalize_channel = wf.normalize_channel,
+            return_channel = wf.return_channel,
+        )
+        if wf.precision is not None:
+            kwargs["precision"] = wf.precision
 
-        pass
+        return TimeChannel(**kwargs)
 
-    def __call__(self, x, no):
-        # TODO: call the underlying AWGN object with (x, no)
-        # check the AWGN docs for the exact expected call signature
-        pass
+    if config.common.active_waveform == "ofdm":
 
+        rg_cfg = config.waveforms.ofdm.resource_grid
 
-class TDLChannelHandle(ChannelHandle):
-    def __init__(self, config: TDLChannelConfig):
-        # TODO: 1. instantiate sionna.phy.channel.tr38901.TDL from config fields
-        #       2. instantiate sionna.phy.channel.TimeChannel, wrapping the TDL
-        #          object — check what args TimeChannel needs beyond the model
-        #          itself (bandwidth, num_time_samples, l_min/l_max...)
-        #       3. if config.l_min/l_max are None, where do you get real values?
-        #          (hint: the TDL object itself exposes these after construction)
-        pass
+        rg_kwargs = dict(
+            num_ofdm_symbols = rg_cfg.num_ofdm_symbols,
+            fft_size = rg_cfg.fft_size,
+            subcarrier_spacing = rg_cfg.subcarrier_spacing,
+            num_tx = rg_cfg.num_tx,
+            num_streams_per_tx = rg_cfg.num_streams_per_tx,
+            cyclic_prefix_length = rg_cfg.cyclic_prefix_length,
+            num_guard_carriers = rg_cfg.num_guard_carriers,
+            dc_null = rg_cfg.dc_null,
+            pilot_pattern = rg_cfg.pilot_pattern,
+            pilot_ofdm_symbol_indices = rg_cfg.pilot_ofdm_symbol_indices,
+        )
 
-    def __call__(self, x, no):
-        # TODO: reshape x from flat symbols into TimeChannel's expected
-        #       [batch, num_tx, num_tx_ant, num_time_samples] shape,
-        #       call the wrapped TimeChannel, then decide: truncate or
-        #       pad the output back to the input length? (your own
-        #       open question #2 — pick a default, note it in a comment)
-        pass
+        if rg_cfg.precision is not None:
+            rg_kwargs["precision"] = rg_cfg.precision
 
+        resource_grid = ResourceGrid(**rg_kwargs)
 
-def build_channel(config: ChannelConfig) -> ChannelHandle:
+        if isinstance(channel_model, AWGN):
+            return channel_model
 
-    if isinstance(config, AWGNChannelConfig):
+        ofdm_cfg = config.waveforms.ofdm
 
-        return AWGNChannelHandle()
+        ofdm_kwargs = dict(
+            channel_model = channel_model,
+            resource_grid = resource_grid,
+            normalize_channel = ofdm_cfg.normalize_channel,
+            return_channel = ofdm_cfg.return_channel,
+        )
+        if ofdm_cfg.precision is not None:
+            ofdm_kwargs["precision"] = ofdm_cfg.precision
 
-    elif isinstance(config, TDLChannelConfig):
-        return TDLChannelHandle(config)
+        return OFDMChannel(**ofdm_kwargs)
 
-    raise ValueError(f"No builder for channel config type: {type(config)!r}")
-
-
-def build_source(config: SourceConfig):
-    # TODO: dispatch on config.type once more than "binary" exists;
-    # for now this can just always return sionna.phy.mapping.BinarySource()
-    pass
-
-
-def build_mapsys(config: ModulationConfig):
-    # TODO: construct Constellation(config.type, config.num_bits_per_symbol),
-    # then Mapper(constellation) and Demapper(...) — check Demapper's
-    # required args, it needs to know the demapping method ("app" vs "maxlog")
-    # which your schema doesn't currently capture — you may need to add
-    # a field for that
-    pass
+    raise ValueError(f"Unknown active_waveform: {config.common.active_waveform!r}")
