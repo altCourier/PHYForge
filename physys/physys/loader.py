@@ -14,8 +14,6 @@ from typing import Union
 
 from schema import parse_config, Config
 
-print("a")
-
 class ConfigLoadError(Exception):
     """Raised when a config file can't be found, read, parsed as JSON,
     or validated against the schema. Wraps the underlying cause so
