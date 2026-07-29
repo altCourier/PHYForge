@@ -1,0 +1,159 @@
+{
+  "common": {
+
+    "_comment": "precision/device are inherited defaults -- any block below can still override them locally. active_channel/active_waveform are pure selectors used to look up which channel/waveform block to build; they are NOT inherited, just dispatched on.",
+    
+    "precision": "single",
+    "device": null,
+    
+    "active_channel": "tdl",
+    "active_waveform": "time"
+  },
+
+  "source": {
+    
+    "binary": {
+      "_comment": "shape is a call-time input to BinarySource, not a config field. It is derived at runtime from sweep.batch_size and sweep.num_symbols (times modulation.num_bits_per_symbol for the bit count), so it can never disagree with sweep. See runtime_derivations.py: get_binary_source_shape()."
+    }
+
+  },
+
+  "modulation": {
+
+    "type": "qam",
+    "num_bits_per_symbol": 4,
+
+    "mapper": {
+      "return_indices": false
+    },
+
+    "demapper": {
+      "hard_out": false,
+      "demapping_method": "app"
+    },
+
+    "constellation": {
+      "_comment": "normalize/center/points only apply if type were 'custom' -- unused for qam.",
+      "normalize": false,
+      "center": false,
+      "points": null
+    }
+  },
+
+  "channels": {
+
+    "awgn": {
+      "_comment": "no (noise power) is not a static value -- it's computed per sweep point at runtime from sweep.ebno_db via Sionna's ebnodb2no() helper (using modulation.num_bits_per_symbol). x (the input tensor) is the pipeline's own live mapper output, also never config. See runtime_derivations.py: get_no_for_ebno()."
+    },
+
+    "tdl": {
+
+      "model": "A",
+
+      "delay_spread": 1e-7,
+      "carrier_frequency": 1.4e11,
+      "num_sinusoids": 20,
+      "los_angle_of_arrival": 0.7853981633974483,
+
+      "min_speed": 0.0,
+      "max_speed": null,
+
+      "num_rx_ant": 1,
+      "num_tx_ant": 1,
+
+      "spatial_corr_mat": null,
+
+      "rx_corr_mat": null,
+      "tx_corr_mat": null,
+
+      "_comment": "Single-link model (always one tx, one rx). Call-time inputs batch_size/num_time_steps/sampling_frequency are derived at runtime from sweep.batch_size, waveforms.time.num_time_samples, and waveforms.time.bandwidth. See runtime_derivations.py: get_channel_call_kwargs()."
+    },
+
+    "system_level": {
+
+      "_description": "3GPP TR 38.901 system-level channel models (UMi/UMa/RMa) -- antenna-array and topology based, distinct from TDL's simpler tapped-delay-line model.",
+      
+      "variant": "umi",
+
+      "carrier_frequency": 1.4e11,
+
+      "o2i_model": "low",
+      "direction": "downlink",
+
+      "enable_pathloss": true,
+      "enable_shadow_fading": true,
+
+      "bs_array": {
+        "num_rows_per_panel": 1,
+        "num_cols_per_panel": 1,
+        "polarization": "single",
+        "polarization_type": "V",
+        "antenna_pattern": "38.901"
+      },
+
+      "ut_array": {
+        "num_rows_per_panel": 1,
+        "num_cols_per_panel": 1,
+        "polarization": "single",
+        "polarization_type": "V",
+        "antenna_pattern": "omni"
+      }
+
+    },
+
+    "rayleigh_block_fading": {
+
+      "num_rx": 1,
+      "num_rx_ant": 1,
+      "num_tx": 1,
+      "num_tx_ant": 1,
+      
+      "_comment": "Multi-link model (supports multiple tx/rx, unlike TDL). Shares the same call-time inputs as TDL (batch_size/num_time_steps/sampling_frequency, both are ChannelModel subclasses) but NOT the same constructor shape -- kept as a separate block deliberately, not merged with tdl."
+    }
+  },
+
+  "waveforms": {
+
+    "time": {
+
+      "_comment": "Channel model is intentionally absent here. TimeChannel(channel_model, ...) takes the already-built channel object (the output of build_channel()) as its first positional argument at runtime -- it's how build_channel() and build_waveform() wire together, not a config value. no (noise power) is likewise computed at runtime, never stored here.",
+      
+      "bandwidth": 1e6,
+      "num_time_samples": 100,
+      "maximum_delay_spread": 3e-6,
+
+      "l_min": null,
+      "l_max": null,
+
+      "normalize_channel": false,
+      "return_channel": false
+    },
+
+    "ofdm": {
+      
+        "_comment": "Same reasoning as waveforms.time: channel model and no are runtime inputs, not config fields.",
+      
+        "resource_grid": {
+        "num_ofdm_symbols": 14,
+        "fft_size": 128,
+        "subcarrier_spacing": 30e3,
+        "num_tx": 1,
+        "num_streams_per_tx": 1,
+        "cyclic_prefix_length": 16,
+        "num_guard_carriers": [5, 6],
+        "dc_null": true,
+        "pilot_pattern": "kronecker",
+        "pilot_ofdm_symbol_indices": [2, 11]
+      },
+
+      "normalize_channel": false,
+      "return_channel": false
+    }
+  },
+
+  "sweep": {
+    "ebno_db": { "start": -10, "stop": 10, "step": 2 },
+    "batch_size": 8,
+    "num_symbols": 100
+  }
+}
