@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "PHYForge"
+version = "2026.0.0"
+dynamic = ["version"]
+
+description = "Sionna-based wireless data generation for AMR tasks"
+
+readme = "README.md"
+license = "MIT"
+keywords = ["AMR", "Sionna", "Wireless", "3GPP", "5G", "Data", "Generation", "Data generation"]
+license-files = ["LICEN[CS]E.*"]
+
+dependencies = [
+    "sionna = 2.0.1",
+    "torch >= 2.9",
+    "numpy",
+    "matplotlib"
+]
+
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["physys"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
