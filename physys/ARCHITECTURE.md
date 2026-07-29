@@ -6,9 +6,9 @@ Status: design draft. This document describes the intended architecture before i
 
 1. **Pure composition — never reimplement, only compose.** PHYSys does not reimplement any signal-processing logic, ever. Every operation is a direct call into a Sionna class or function. This is a hard rule, not a preference: before writing any new function in `builders.py` or `runtime.py`, check whether Sionna already exposes it. Given the breadth of Sionna's own API — sources, mappers, every channel model family, FEC, OFDM resource grids/modulators/estimators/equalizers, filters — the honest expectation is that PHYSys should almost never need to write actual DSP code. If a builder function is doing math instead of instantiating and wiring Sionna objects, that's a signal something's wrong. PHYSys's own code is limited to: parsing config, validating it, and constructing/wiring the corresponding Sionna objects together.
 
-2. **One file, nested sections, decider fields for choice.** All experiment configuration lives in a single `config.json` at the repo root. Every possible variant of a section (every channel model, every waveform) is present in the file at all times, fully parameterized — nothing is deleted or commented out to switch experiments. A top-level `active_channel` field and a top-level `active_waveform` field are the only things that change between runs: they name which block under `channels` / `waveforms` is actually used. Everything else in those objects sits inert. This is deliberately different from a `type`-discriminator-per-section pattern (Kubernetes/Terraform-style) — it's closer to keeping every environment's config in one `docker-compose.yml` and picking which service actually runs.
+2. **One file, nested sections, decider fields for choice.** All experiment configuration lives in a single `config.json` at the repo root. Every possible variant of a section (every channel model, every waveform) is present in the file at all times, fully parameterized — nothing is deleted or commented out to switch experiments. A `common.active_channel` field and a `common.active_waveform` field are the only things that change between runs: they name which block under `channels` / `waveforms` is actually used. Everything else in those objects sits inert. This is deliberately different from a `type`-discriminator-per-section pattern (Kubernetes/Terraform-style) — it's closer to keeping every environment's config in one `docker-compose.yml` and picking which service actually runs.
 3. **The code is the decider, not the config.** The config only ever supplies parameter values. It never encodes branching logic itself — `active_channel: "tdl"` is a plain string the loader reads and looks up; nothing about *how* that dispatch happens lives in the JSON. All "given this name, build that Sionna object" logic lives inside PHYSys's builder layer, in exactly one place per section.
-4. **No duplicated shapes.** UMi, UMa, and RMa are not three separate config blocks — they share one `system_level` block with a `variant` field, because their parameters (antenna arrays, topology, pathloss/shadow-fading flags) are identical; only which Sionna class gets constructed differs. `precision` and `device` are declared once at the top level and inherited by every block; a block only needs its own `precision`/`device` entry if it's overriding the global value, not repeating it.
+4. **No duplicated shapes.** UMi, UMa, and RMa are not three separate config blocks — they share one `system_level` block with a `variant` field, because their parameters (antenna arrays, topology, pathloss/shadow-fading flags) are identical; only which Sionna class gets constructed differs. `precision` and `device` are declared once, under `common`, and inherited by every block; a block only needs its own `precision`/`device` entry if it's overriding the global value, not repeating it.
 5. **Adding a new variant should not require touching existing variants.** Supporting a new channel model or waveform means adding a new block under `channels`/`waveforms` + a new builder branch — not modifying how existing blocks are parsed or built.
 
 ## High-level pipeline
@@ -38,7 +38,7 @@ physys/
 │   ├── __init__.py
 │   ├── schema.py       # all section dataclasses + registries (block name -> dataclass)
 │   │                    # -- pure data + validation, NO Sionna imports at all
-│   ├── loader.py         # config.json -> validated Config object; resolves active_channel/active_waveform
+│   ├── loader.py         # path -> dict -> validated Config object (read file, parse JSON, delegate to schema.py)
 │   ├── builders.py        # schema -> live Sionna objects, one function per logical section
 │   ├── runtime.py          # PHYSys.generate() / generate_sweep()
 │   ├── export.py            # write generated samples to disk
@@ -63,13 +63,13 @@ If a rule about a field's meaning is ever duplicated in both files, that's a bug
 
 Top level:
 
-- `precision`, `device` — global defaults, inherited by every block unless a block sets its own non-null value
+- `common` — a tier for two different kinds of top-level fields, grouped together for tidiness but not identical in behavior:
+- `precision`, `device` — global **defaults**, inherited by every block unless a block sets its own non-null value. These get looked up locally per block; a block can always override them.
+- `active_channel`, `active_waveform` — pure **selectors**. These are not inherited by anything; they're looked up exactly once, by `builders.py`, to decide which block under `channels`/`waveforms` is live for this run. Nothing else reads them as a "default."
 - `source` — currently `binary` only
 - `modulation` — `type`, `num_bits_per_symbol`, `demapping_method`, plus nested `mapper`, `demapper`, `constellation` blocks (these consume `type`/`num_bits_per_symbol`/`demapping_method` from the parent rather than repeating them)
-- `active_channel` — string naming which block under `channels` is used this run
-- `channels` — always contains all known channel blocks, fully parameterized; only `active_channel` decides which one runs
-- `active_waveform` — string naming which block under `waveforms` is used this run
-- `waveforms` — `time` (drives `TimeChannel`) and `ofdm` (drives `OFDMChannel` + a nested `resource_grid` block, since `ResourceGrid` is a distinct Sionna object from `OFDMChannel` itself)
+- `channels` — always contains all known channel blocks, fully parameterized; only `common.active_channel` decides which one runs
+- `waveforms` — `time` (drives `TimeChannel`) and `ofdm` (drives `OFDMChannel` + a nested `resource_grid` block, since `ResourceGrid` is a distinct Sionna object from `OFDMChannel` itself); only `common.active_waveform` decides which one runs
 - `sweep` — SNR range, batch size, num_symbols
 
 ### `channels` blocks
@@ -160,13 +160,13 @@ Top level:
 
 `builders.py` holds one function per logical section. Every function's job is to look up Sionna classes and wire them — nothing computed by hand:
 
-- `build_channel(config)` reads `active_channel`, looks up the matching block under `channels`, and dispatches:
+- `build_channel(config)` reads `common.active_channel`, looks up the matching block under `channels`, and dispatches:
   - `awgn` → `sionna.phy.channel.AWGN`, used directly
-  - `tdl` → `sionna.phy.channel.tr38901.TDL` + `sionna.phy.channel.TimeChannel` (when `active_waveform == "time"`), handling the reshape from flat symbol sequences to `TimeChannel`'s expected `[batch, num_tx, num_tx_ant, num_time_samples]`, and the filter-tail policy (see Open Questions) — this reshape/tail glue is the one piece of this branch that is PHYSys's own code, since it's shape bookkeeping, not signal processing
+  - `tdl` → `sionna.phy.channel.tr38901.TDL` + `sionna.phy.channel.TimeChannel` (when `common.active_waveform == "time"`), handling the reshape from flat symbol sequences to `TimeChannel`'s expected `[batch, num_tx, num_tx_ant, num_time_samples]`, and the filter-tail policy (see Open Questions) — this reshape/tail glue is the one piece of this branch that is PHYSys's own code, since it's shape bookkeeping, not signal processing
   - `system_level` → dispatches again on `variant` (`umi`/`uma`/`rma`) to `sionna.phy.channel.tr38901.PanelArray` (x2, for `bs_array`/`ut_array`) + the matching `{UMi,UMa,RMa}` class, topology from `gen_single_sector_topology` — one function, one `if/elif` on `variant`, not three near-identical builder branches
 - `build_source(config)` → `sionna.phy.mapping.BinarySource`
 - `build_mapsys(config)` → `sionna.phy.mapping.Constellation`, then `Mapper` and `Demapper` both built from that same `Constellation` instance plus the parent `modulation` block's `type`/`num_bits_per_symbol`/`demapping_method` — the config states these once, the builder wires them into both
-- `build_waveform(config)` reads `active_waveform` and dispatches:
+- `build_waveform(config)` reads `common.active_waveform` and dispatches:
   - `time` → wraps the channel in `sionna.phy.channel.TimeChannel`
   - `ofdm` → builds `sionna.phy.ofdm.ResourceGrid` from `waveforms.ofdm.resource_grid`, then `sionna.phy.channel.OFDMChannel`
 
