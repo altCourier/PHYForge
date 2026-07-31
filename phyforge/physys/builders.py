@@ -126,13 +126,16 @@ def build_channel(config: Config):
 
         kwargs = dict(
             carrier_frequency = channel_config.carrier_frequency,
-            o2i_model = channel_config.o2i_model,
             ut_array = ut_array,
             bs_array = bs_array,
             direction = channel_config.direction,
             enable_pathloss = channel_config.enable_pathloss,
             enable_shadow_fading = channel_config.enable_shadow_fading,
         )
+
+        if channel_config.variant in ("umi", "uma"):
+            kwargs["o2i_model"] = channel_config.o2i_model
+
         kwargs.update(_pd_kwargs(channel_config, common))
 
         # TODO: gen_single_sector_topology (per ARCHITECTURE.md) still
