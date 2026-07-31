@@ -6,7 +6,7 @@
     "precision": "single",
     "device": null,
     
-    "active_channel": "tdl",
+    "active_channel": "system_level",
     "active_waveform": "time"
   },
 
