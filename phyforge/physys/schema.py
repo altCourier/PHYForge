@@ -295,6 +295,15 @@ class Config:
                 f"got {self.common.active_waveform!r}"
             )
 
+        if (self.common.active_waveform == "time"
+            
+            and self.sweep.num_symbols != self.waveforms.time.num_time_samples):
+
+            raise ValueError(
+                f"sweep.num_symbols ({self.sweep.num_symbols}) must equal "
+                f"waveforms.time.num_time_samples ({self.waveforms.time.num_time_samples}) "
+                f"when active_waveform='time'"
+            )
 
 # ---- parser functions ----
 

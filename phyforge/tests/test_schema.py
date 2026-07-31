@@ -321,19 +321,8 @@ def test_config_parses_with_comment_keys_sprinkled_throughout():
 
 # ---------------------------------------------------------------------------
 # 5. num_symbols == num_time_samples cross-field check
-#
-# This validation does NOT exist yet -- Config.__post_init__ only checks
-# active_channel/active_waveform. Per the "write the test first" plan,
-# this is marked xfail(strict=True): it SHOULD fail right now. If you
-# implement the check and this unexpectedly starts passing, pytest will
-# flag it as XPASS (strict=True makes that a failure) -- that's your
-# signal to delete the marker, not a bug in the test.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    reason="Config.__post_init__ doesn't yet enforce num_symbols == num_time_samples",
-    strict=True,
-)
 def test_num_symbols_must_match_num_time_samples():
     raw = base_config_dict()
     raw["sweep"]["num_symbols"] = 128
