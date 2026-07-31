@@ -194,7 +194,7 @@ class ResourceGridConfig:
     cyclic_prefix_length: int = 16
     num_guard_carriers: List[int] = field(default_factory=lambda: [0, 0])
     dc_null: bool = True
-    pilot_pattern: Literal["kronecker", "empty"] = "kronecker"
+    pilot_pattern: Literal["kronecker", "empty"] = "empty"
     pilot_ofdm_symbol_indices: List[int] = field(default_factory=list)
 
     precision: Optional[str] = None
@@ -241,6 +241,15 @@ class EbNoRangeConfig:
     start: float
     stop: float
     step: float
+
+    def __post_init__(self):
+
+        if self.step <= 0:
+
+            raise ValueError(
+                f"EbNoRangeConfig.step must be > 0, got {self.step!r} "
+                f"(a non-positive step makes generate_sweep()'s loop never terminate)"
+            )
 
 
 @dataclass
