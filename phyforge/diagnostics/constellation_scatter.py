@@ -7,20 +7,7 @@ modulation order.
 
 Confirms:
   - the noise cloud actually shrinks as SNR increases
-  - cluster geometry matches the modulation you asked for (a subtly
-    wrong constellation build is otherwise invisible in a BER curve,
-    since BER can look fine on average even with a rotated/mislabeled
-    constellation, as long as decision regions still line up)
-
-NOT a pytest test -- eyeball it. Reuses build_awgn_config from the BER
-waterfall diagnostic so both scripts stay in sync on modulation set.
-
-Note: PHYSys.generate() only returns (bits, llr) -- it doesn't expose
-x (mapper output) or y (post-channel) directly, and this script
-doesn't modify runtime.py to add that. Instead it drives the same
-building blocks PHYSys already assembled (sys.mapper, sys._handle)
-directly, mirroring exactly what _apply_time_channel's AWGN branch
-does internally, just stopping before the demapper.
+  - cluster geometry matches the modulation
 """
 
 import numpy as np
