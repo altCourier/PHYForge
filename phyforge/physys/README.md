@@ -13,9 +13,9 @@ Read JSON config -> Validate against schema -> Build Sionna objects -> Run simul
 Source -> Map -> Channel -> Demap
 ```
 
-This document covers all four modules (`loader`, `schema`, `builders`, `runtime`),
-every configuration field with its default, and the behavioral edge cases that show up
-in the current implementation.
+This document covers all five modules (`loader`, `schema`, `builders`, `runtime`,
+`export`), every configuration field with its default, and the behavioral edge cases
+that show up in the current implementation.
 
 ---
 
@@ -27,10 +27,11 @@ in the current implementation.
 4. [physys.schema](#2-physysschema)
 5. [physys.builders](#3-physysbuilders)
 6. [physys.runtime](#4-physysruntime)
-7. [Configuration Reference (JSON)](#configuration-reference-json)
-8. [End-to-End Execution Trace](#end-to-end-execution-trace)
-9. [Known Limitations & Gotchas](#known-limitations--gotchas)
-10. [Full config.json Example](#full-configjson-example)
+7. [physys.export](#5-physysexport)
+8. [Configuration Reference (JSON)](#configuration-reference-json)
+9. [End-to-End Execution Trace](#end-to-end-execution-trace)
+10. [Known Limitations & Gotchas](#known-limitations--gotchas)
+11. [Full config.json Example](#full-configjson-example)
 
 ---
 
@@ -39,6 +40,7 @@ in the current implementation.
 ```python
 from physys.loader import load_config
 from physys.runtime import PHYSys
+from physys import export
 
 config = load_config("path/to/config.json")
 
@@ -46,13 +48,17 @@ sim = PHYSys(config)
 
 # Single run
 bits, llr = sim.generate(batch_size=32, num_symbols=64, ebno_db=5.0)
+export.export_run(bits, llr, "run.h5", ebno_db=5.0, config=config)
 
 # Sweep over config.sweep.ebno_db
 results = sim.generate_sweep()   # {ebno_db: (bits, llr), ...}
+export.export_sweep(results, "sweep.h5", config=config)
 ```
 
 `PHYSys` builds every Sionna component exactly once, in `__init__`. Only
 `batch_size`, `num_symbols`, and `ebno_db` vary between calls to `generate()`.
+`physys.export` then takes whatever `generate()`/`generate_sweep()` produced and
+writes it to disk as HDF5, independent of how the tensors were produced.
 
 ---
 
@@ -64,8 +70,11 @@ results = sim.generate_sweep()   # {ebno_db: (bits, llr), ...}
 | `physys.schema` | Dataclasses + validation for the config tree | **No** (by design) |
 | `physys.builders` | Validated `Config` -> live Sionna objects | Yes |
 | `physys.runtime` | Orchestrates built objects into `generate()` / `generate_sweep()` | Yes |
+| `physys.export` | Serializes `generate()`/`generate_sweep()` output to/from HDF5 | No (only `h5py`/`numpy`) |
 
-`schema.py` is intentionally free of heavy imports.
+`schema.py` is intentionally free of heavy imports. `export.py` follows the same
+philosophy — it depends on `h5py`/`numpy` only, not Sionna or TensorFlow/PyTorch
+directly, aside from duck-typing tensors via `.numpy()`.
 
 ---
 
@@ -533,6 +542,151 @@ multiplexing.
 
 ---
 
+## 5. physys.export
+
+Pure serialization module: takes tensors already produced by `PHYSys.generate()` /
+`generate_sweep()` and writes them to disk as HDF5, and reads them back. It has no
+knowledge of Sionna itself — the only tensor-backend-specific assumption in the whole
+module is confined to a single helper, `_to_numpy`.
+
+Imports: `h5py`, `numpy` (plus stdlib `dataclasses`, `json`, `time`, `pathlib`). No
+Sionna/TensorFlow/PyTorch import.
+
+### Internal helpers
+
+**`_to_numpy(x)`**
+Converts a Sionna/TensorFlow tensor, a torch tensor, or an already-`ndarray` value to
+`numpy.ndarray`. If `x` exposes a `.numpy()` method, that's called; otherwise falls
+back to `np.asarray(x)`. This is the single place a different tensor backend would
+need to be accommodated.
+
+**`_config_json(config) -> Optional[str]`**
+Returns `None` if `config is None`, otherwise `json.dumps(dataclasses.asdict(config))`.
+Used to embed the `schema.Config` that produced a run as a self-describing JSON
+attribute on the HDF5 file — note this calls `dataclasses.asdict`, so `config` must be
+an actual dataclass instance (e.g. `schema.Config`), not an arbitrary object.
+
+**`_utc_timestamp() -> str`**
+Returns the current UTC time as `"%Y-%m-%dT%H:%M:%SZ"` (e.g.
+`"2026-08-03T14:22:01Z"`), used to stamp every file written with a `created_utc`
+attribute.
+
+### `export_run(bits, llr, path, *, ebno_db=None, config=None, compression="gzip") -> None`
+
+Writes one `PHYSys.generate()` result to a **new** HDF5 file at `path`.
+
+**Parameters**
+| Parameter | Type | Notes |
+|---|---|---|
+| `bits`, `llr` | whatever `PHYSys.generate()` returned | Converted via `_to_numpy` before writing. |
+| `path` | `str` or `Path` | Destination file. |
+| `ebno_db` | `Optional[float]` | If given, recorded as a top-level file attr for convenience. |
+| `config` | `Optional[schema.Config]` | If given, serialized via `_config_json` and stored as a `config_json` attr so a loaded file is self-describing. |
+| `compression` | `str` | Passed straight to `h5py.create_dataset`; `"gzip"` by default. Pass `None` to disable compression. |
+
+**Behavior**
+- Creates `path.parent` if it doesn't exist (`mkdir(parents=True, exist_ok=True)`).
+- Opens the file in `"w"` mode — **this creates or overwrites `path`**. It writes
+  exactly one run per call, not an appending log. If you want to accumulate
+  individual runs into one file over time, open the file yourself in `"a"` mode and
+  create groups per call rather than reusing `export_run` in a loop.
+- Datasets written at the file root: `"bits"`, `"llr"`.
+- Attributes written at the file root: `created_utc` (always), `ebno_db` (only if
+  passed), `config_json` (only if `config` is not `None`).
+
+**Returns:** `None`.
+
+### `export_sweep(results, path, *, config=None, compression="gzip") -> None`
+
+Writes a `PHYSys.generate_sweep()` result (`{ebno_db: (bits, llr)}`) to **one** HDF5
+file, with one HDF5 group per Eb/N0 point.
+
+**Parameters**
+| Parameter | Type | Notes |
+|---|---|---|
+| `results` | `dict[float, tuple]` | As returned by `generate_sweep()`. |
+| `path` | `str` or `Path` | Destination file; created/overwritten like `export_run`. |
+| `config` | `Optional[schema.Config]` | Same as `export_run` — stored once at the file root. |
+| `compression` | `str` | Same as `export_run`, applied per-dataset within each group. |
+
+**Behavior**
+- `ebno_values = sorted(results.keys())` — groups are written in ascending Eb/N0
+  order regardless of the dict's insertion order.
+- File-root attributes: `created_utc`, `ebno_db_points` (a `float64` `numpy` array of
+  every Eb/N0 value in the sweep, for quick inspection without opening every group),
+  `config_json` (if `config` given).
+- For each `ebno_db` in `results`, creates a group named `f"ebno_db={ebno_db:.4f}"`
+  containing:
+  - group attr `ebno_db` (the float value, exactly — not re-derived from the group
+    name string)
+  - datasets `"bits"`, `"llr"` (converted via `_to_numpy`, same compression setting)
+- Points are stored **independently** — each group has its own `bits`/`llr` shapes.
+  `generate()` takes `batch_size`/`num_symbols` per call, and `generate_sweep()`
+  happens to reuse `sweep.batch_size`/`sweep.num_symbols` for every point today, but
+  `export_sweep` doesn't assume that stays true — it doesn't require groups to share
+  a shape.
+
+**Returns:** `None`.
+
+> **Group-name vs. attr caveat:** the group name embeds `ebno_db` formatted to 4
+> decimal places (`f"{ebno_db:.4f}"`), purely for human readability when browsing the
+> file with an HDF5 viewer. `load_sweep` never parses this string — it always reads
+> the `ebno_db` attr stored on the group instead, so precision loss in the group name
+> doesn't affect round-tripping.
+
+### `load_run(path) -> dict`
+
+Reads back a file written by `export_run`.
+
+**Returns**
+```python
+{
+    "bits": ndarray,
+    "llr": ndarray,
+    "ebno_db": float | None,   # None if the file has no ebno_db attr
+    "config": dict | None,     # json.loads(config_json) if present, else None
+}
+```
+
+Note `"config"` comes back as a plain `dict` (the result of `json.loads`), **not** a
+reconstructed `schema.Config` dataclass instance — round-tripping back into a
+`Config` object, if needed, is the caller's responsibility (e.g. via
+`schema.parse_config`-style reconstruction).
+
+### `load_sweep(path) -> dict`
+
+Reads back a file written by `export_sweep`.
+
+**Returns:** `{ebno_db: (bits_ndarray, llr_ndarray), ...}`, keyed by the float
+recorded in each group's `ebno_db` attribute — **not** by re-parsing the group name
+(`f.values()` is iterated directly and each group's own `ebno_db` attr is trusted as
+the source of truth).
+
+### Usage example
+
+```python
+from physys.runtime import PHYSys
+from physys import export
+
+sim = PHYSys(config)
+
+# Single run
+bits, llr = sim.generate(batch_size=32, num_symbols=64, ebno_db=5.0)
+export.export_run(bits, llr, "runs/run_5db.h5", ebno_db=5.0, config=config)
+
+reloaded = export.load_run("runs/run_5db.h5")
+reloaded["bits"], reloaded["llr"], reloaded["ebno_db"]  # ndarray, ndarray, 5.0
+
+# Sweep
+results = sim.generate_sweep()
+export.export_sweep(results, "runs/sweep.h5", config=config)
+
+reloaded_sweep = export.load_sweep("runs/sweep.h5")
+bits_at_0db, llr_at_0db = reloaded_sweep[0.0]
+```
+
+---
+
 ## Configuration Reference (JSON)
 
 Top-level keys required by `parse_config(raw)`:
@@ -555,7 +709,9 @@ Top-level keys required by `parse_config(raw)`:
   use them freely for inline comments.
 
 See field-by-field tables in the [physys.schema](#2-physysschema) section above for
-every key, type, and default.
+every key, type, and default. `physys.export` does not read `config.json` itself — it
+only stores whatever `schema.Config` object it's handed as a JSON attr for
+provenance.
 
 ---
 
@@ -584,6 +740,12 @@ sim.generate(batch_size, num_symbols, ebno_db)
   │     ├─ "time" (non-AWGN) -> reshape -> handle -> truncate -> reshape back
   │     └─ "ofdm" (non-AWGN) -> NotImplementedError
   └─ demapper(y, no) -> llr
+
+export.export_run(bits, llr, path, ebno_db=..., config=config)
+  └─ h5py.File(path, "w") -> datasets "bits"/"llr" + attrs (created_utc, ebno_db, config_json)
+
+export.export_sweep(results, path, config=config)
+  └─ h5py.File(path, "w") -> one group per ebno_db, each with own "bits"/"llr" datasets
 ```
 
 ---
@@ -594,34 +756,59 @@ sim.generate(batch_size, num_symbols, ebno_db)
    `OFDMChannel` for you, but `PHYSys.generate()` raises `NotImplementedError` the
    moment it reaches `_apply_time_channel` for any non-AWGN OFDM config. The
    resource-grid reshape logic simply hasn't been written yet.
+
 2. **TDL/time-waveform tail truncation loses energy.** `TimeChannel`'s output is
    longer than its input by `l_max - l_min` samples; the extra samples (belonging to
    the tail of the channel's impulse response) are truncated away rather than folded
    back in.
+
 3. **No FEC.** `self._coderate` is hardcoded to `1.0` everywhere `ebnodb2no` is
    called.
+
 4. **`num_symbols` must equal `waveforms.time.num_time_samples`.** This is assumed by
    the time-domain reshape path but never checked or enforced by the schema — passing
    mismatched values will produce a shape error or silently wrong output depending on
    how Sionna's `TimeChannel` reacts.
+
 5. **System-level topology only supports a single UT.** `num_ut=1` is hardcoded in
    `_maybe_set_topology`; multi-UT scenarios aren't wired up.
+
 6. **`show_topology()` needs a prior `generate()` call.** Topology tensors are only
    populated inside `generate()`, not in `__init__`.
+
 7. **`o2i_model` is silently dropped for RMa.** It's only passed through to the
    constructor for `"umi"`/`"uma"` variants; setting it under an `"rma"`
    `system_level` config has no effect.
+
 8. **Precision/device resolution can end up fully implicit.** If neither a block nor
    `common` sets `precision`/`device`, `_pd_kwargs` omits both keys entirely and the
    underlying Sionna class's own default takes over — worth knowing if you're
    debugging a dtype/device mismatch that doesn't show up anywhere in the config.
+
 9. **`ChannelsConfig`/`WaveformsConfig` require all sub-blocks in JSON**, active or
    not — `tdl`, `system_level`, `time`, and `ofdm` keys must all exist even if you're
    only running AWGN + time waveform.
+
 10. **`generate_sweep()`'s Eb/N0 loop uses float accumulation** (`ebno_db += step` in
     a `while` loop), so results dict keys and the exact number of points can be
     sensitive to floating-point rounding when `step` doesn't evenly divide
     `stop - start`.
+
+11. **`export_run`/`export_sweep` overwrite, they don't append.** Both open their
+    target file in `"w"` mode, so calling either in a loop against the same `path`
+    destroys the previous run rather than accumulating results. Use `"a"` mode and
+    manual group creation if you need an append-log of many runs in one file.
+
+12. **`load_run`'s `"config"` is a `dict`, not a `Config`.** `export_run`/`export_sweep`
+    serialize `config` via `dataclasses.asdict`, and `load_run`/`load_sweep` hand it
+    back via plain `json.loads` — there's no automatic reconstruction into a
+    `schema.Config` instance, so code that needs a live `Config` object back has to
+    rebuild it itself.
+
+13. **`export_sweep`'s group names are cosmetic.** The `ebno_db={:.4f}` group name is
+    for human browsing only; both `export_sweep`'s writer and `load_sweep`'s reader
+    rely on the `ebno_db` float attribute stored on the group, not on parsing the
+    group name back into a number.
 
 ---
 
