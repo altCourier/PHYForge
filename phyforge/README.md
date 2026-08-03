@@ -47,7 +47,7 @@ PHYSys grew out of wrapper classes (`Source`, `MapSys`, `Channel`, `PHYSys`) ori
 ## Roadmap
 
 - [x] Finalize config schema (channels: AWGN, TDL, system-level UMi/UMa/RMa; waveforms: time, OFDM)
-- [ ] Builder layer for schema → Sionna object graph
+- [x] Builder layer for schema → Sionna object graph
 - [ ] Sweep execution + dataset export
 - [ ] Documentation + examples
 
