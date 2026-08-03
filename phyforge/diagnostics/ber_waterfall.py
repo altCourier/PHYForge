@@ -4,6 +4,16 @@ diagnostics/ber_waterfall.py
 Pre-export.py visual/diagnostic sanity check #1:
 BER vs Eb/No waterfall curves, per modulation, AWGN only, overlaid
 against theoretical closed-form BER for QAM/PAM.
+
+Revised to use sionna.phy.utils.sim_ber for the Monte-Carlo accumulation
+loop instead of a hand-rolled while-loop. sim_ber batches internally and
+stops per-SNR-point once num_target_bit_errors is reached (or max_mc_iter
+is hit), which is exactly what the old empirical_ber() did by hand.
+
+The "low confidence" reliability flag (was the old code's own bookkeeping)
+is reconstructed here via sim_ber's `callback` hook, since sim_ber/PlotBER
+only return the final (ber, bler) tensors -- they don't expose per-point
+"did we actually hit the target" status on their own.
 """
 
 import math
@@ -11,6 +21,8 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+
+from sionna.phy.utils import sim_ber
 
 from physys.schema import (
     Config, CommonConfig, BinarySourceConfig,
@@ -25,8 +37,7 @@ from physys.runtime import PHYSys
 
 
 # ---------------------------------------------------------------------
-# Config to test: (type, num_bits_per_symbol) pairs matching the
-# bit-widths your unit tests already cover.
+# Config to test: (type, num_bits_per_symbol) pairs
 # ---------------------------------------------------------------------
 MODULATIONS = [
     ("pam", 1),   # BPSK
@@ -129,39 +140,56 @@ def build_awgn_config(mod_type: str, k: int) -> Config:
 
 
 # ---------------------------------------------------------------------
-# Empirical BER, adaptive error accumulation
+# Empirical BER via sim_ber, with a reliability mask reconstructed
+# through the callback hook (sim_ber itself doesn't return per-point
+# "did we hit the target" status -- only the final ber/bler tensors).
 # ---------------------------------------------------------------------
 
-def empirical_ber(sys: PHYSys, ebno_db: float):
+def empirical_ber_sweep(sys: PHYSys, ebno_db_range):
     """
-    Returns (ber, reliable: bool). reliable=False means we hit
-    MAX_ITERATIONS without seeing TARGET_ERRORS -- treat that point as
-    a lower-confidence estimate, not a clean measurement.
-    """
-    total_bits = 0
-    total_errors = 0
-    iterations = 0
+    Runs sim_ber once across the whole Eb/No range for a given built
+    PHYSys instance. Returns (ber: np.ndarray, reliable: np.ndarray[bool]).
 
-    while total_errors < TARGET_ERRORS and iterations < MAX_ITERATIONS:
+    reliable[i] is False if that SNR point hit MAX_ITERATIONS without
+    ever accumulating TARGET_ERRORS bit errors -- i.e. the same
+    "low confidence" condition the old hand-rolled loop tracked itself.
+    """
+
+    def mc_fun(batch_size, ebno_db):
         bits, llr = sys.generate(
-            batch_size=BATCH_SIZE, num_symbols=NUM_SYMBOLS, ebno_db=ebno_db
+            batch_size=batch_size, num_symbols=NUM_SYMBOLS, ebno_db=ebno_db
         )
+        return bits, llr
 
-        # NOTE: assumes LLR = log(Pr(bit=0)/Pr(bit=1)) -- see module
-        # docstring / chat notes. If curves come out mirrored
-        # (empirical tracks 1 - theoretical), flip this comparison.
-        bits_hat = (llr > 0).to(bits.dtype)
+    # Track, per SNR index, whether TARGET_ERRORS was reached by the
+    # time the last allowed Monte-Carlo iteration ran.
+    n_points = len(ebno_db_range)
+    reliable = [False] * n_points
 
-        errors = (bits_hat != bits).sum().item()
-        n_bits = bits.numel()
+    def callback(mc_iter, snr_idx, ebno_dbs, bit_errors, block_errors, nb_bits, nb_blocks):
+        idx = int(snr_idx)
+        reached = bit_errors[idx].item() >= TARGET_ERRORS
+        hit_ceiling = mc_iter >= MAX_ITERATIONS
+        if reached or hit_ceiling:
+            reliable[idx] = reached
+        return None  # let sim_ber's own early-stop/target logic keep driving
 
-        total_errors += errors
-        total_bits += n_bits
-        iterations += 1
+    ebno_tensor = torch.tensor(ebno_db_range, dtype=torch.float32)
 
-    reliable = total_errors >= TARGET_ERRORS
-    ber = total_errors / total_bits if total_bits > 0 else float("nan")
-    return ber, reliable
+    ber, _bler = sim_ber(
+        mc_fun,
+        ebno_tensor,
+        batch_size=BATCH_SIZE,
+        max_mc_iter=MAX_ITERATIONS,
+        soft_estimates=True,          # llr is a logit; sim_ber hard-decides internally
+        num_target_bit_errors=TARGET_ERRORS,
+        early_stop=False,             # we want every point in the fixed range, not just until error-free
+        callback=callback,
+        verbose=False,
+    )
+
+    ber = ber.numpy() if hasattr(ber, "numpy") else np.asarray(ber)
+    return ber, np.array(reliable, dtype=bool)
 
 
 # ---------------------------------------------------------------------
@@ -178,24 +206,12 @@ def main():
         config = build_awgn_config(mod_type, k)
         sys = PHYSys(config)
 
-        emp_ber = []
-        emp_reliable = []
-        theo_ber = []
+        emp_ber, reliable_mask = empirical_ber_sweep(sys, EBNO_DB_RANGE)
+        theo_ber = np.array([theoretical_ber(mod_type, k, db) for db in EBNO_DB_RANGE])
 
-        for ebno_db in EBNO_DB_RANGE:
-            ber, reliable = empirical_ber(sys, ebno_db)
-            t_ber = theoretical_ber(mod_type, k, ebno_db)
-
-            emp_ber.append(ber)
-            emp_reliable.append(reliable)
-            theo_ber.append(t_ber)
-
-            flag = "" if reliable else "  (LOW CONFIDENCE -- too few errors)"
-            print(f"  EbNo={ebno_db:+5.1f} dB  empirical={ber:.3e}  theory={t_ber:.3e}{flag}")
-
-        emp_ber = np.array(emp_ber)
-        theo_ber = np.array(theo_ber)
-        reliable_mask = np.array(emp_reliable)
+        for db, ber, t_ber, rel in zip(EBNO_DB_RANGE, emp_ber, theo_ber, reliable_mask):
+            flag = "" if rel else "  (LOW CONFIDENCE -- too few errors)"
+            print(f"  EbNo={db:+5.1f} dB  empirical={ber:.3e}  theory={t_ber:.3e}{flag}")
 
         ax.semilogy(EBNO_DB_RANGE, theo_ber, "-", label="theory", color="black")
         ax.semilogy(
