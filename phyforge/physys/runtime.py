@@ -45,7 +45,7 @@ class PHYSys:
 
     Built once per Config -- source/mapper/demapper/channel/waveform
     don't change between calls; only batch_size/num_symbols/ebno_db
-    vary per generate() call.
+    vary per generate()/generate_iq() call.
     """
 
     def __init__(self, config: Config):
@@ -101,6 +101,13 @@ class PHYSys:
         AWGN's handle() (see build_waveform) is the identity passthrough
         for shape purposes -- it takes/returns [batch, num_symbols]
         directly, no reshape needed.
+
+        Whatever this returns is exactly what the demapper consumes
+        (see _generate_core below) -- i.e. this IS "y", the raw
+        received noisy symbol tensor an AMR model trains on. Nothing
+        downstream re-derives y independently, so llr and y (when
+        exposed via generate_iq()) are always consistent with each
+        other.
         """
 
         if isinstance(self._channel_model, AWGN):
@@ -143,13 +150,25 @@ class PHYSys:
             f"Unknown active_waveform: {self.config.common.active_waveform!r}"
         )
 
-    # ---- public API ----
+    # ---- shared pipeline implementation ----
 
-    def generate(self, batch_size: int, num_symbols: int, ebno_db: float):
+    def _generate_core(self, batch_size: int, num_symbols: int, ebno_db: float):
         """
-        One Source -> Map -> Channel -> Demap pass.
-        Returns (bits, llr) so callers (export.py / tests) can compute
-        BER/BLER themselves rather than this file owning that metric.
+        One Source -> Map -> Channel -> Demap pass. The single shared
+        implementation behind generate() and generate_iq() -- runs the
+        pipeline exactly once and hands back every intermediate tensor
+        a caller might want. The two public methods differ only in
+        which of these four they choose to return, so there's no risk
+        of the bits/llr and x/y views of a call drifting apart from
+        running the pipeline twice with different random draws.
+
+        Returns (bits, llr, x, y):
+            bits -- source bits, [batch_size, num_symbols * num_bits_per_symbol]
+            llr  -- demapper output, [batch_size, num_symbols]
+            x    -- clean transmitted symbols (mapper output),
+                    [batch_size, num_symbols], complex
+            y    -- noisy received symbols (channel output / demapper
+                    input -- see _apply_time_channel), same shape as x
         """
 
         self._maybe_set_topology(batch_size)
@@ -169,6 +188,22 @@ class PHYSys:
 
         llr = self.demapper(y, no)
 
+        return bits, llr, x, y
+
+    # ---- public API: bits/llr (unchanged) ----
+
+    def generate(self, batch_size: int, num_symbols: int, ebno_db: float):
+        """
+        One Source -> Map -> Channel -> Demap pass.
+        Returns (bits, llr) so callers (export.py / tests) can compute
+        BER/BLER themselves rather than this file owning that metric.
+
+        Contract unchanged on purpose -- existing callers
+        (export.export_run/export_sweep, tests) keep working as-is.
+        For AMR/AMC work that also needs the raw tx/rx symbols, use
+        generate_iq() instead of reaching into private internals.
+        """
+        bits, llr, _x, _y = self._generate_core(batch_size, num_symbols, ebno_db)
         return bits, llr
 
     def generate_sweep(self):
@@ -188,6 +223,56 @@ class PHYSys:
         ebno_db = rng.start
         while ebno_db <= rng.stop:
             results[ebno_db] = self.generate(
+                batch_size=sweep.batch_size,
+                num_symbols=sweep.num_symbols,
+                ebno_db=ebno_db,
+            )
+            ebno_db += rng.step
+
+        return results
+
+    # ---- public API: bits/llr/x/y (AMR dataset generation) ----
+
+    def generate_iq(self, batch_size: int, num_symbols: int, ebno_db: float):
+        """
+        Same Source -> Map -> Channel -> Demap pass as generate(), but
+        additionally returns the raw I/Q symbol tensors:
+
+            bits, llr, x, y = sim.generate_iq(batch_size, num_symbols, ebno_db)
+
+        x -- clean transmitted symbols (mapper output). Useful for a
+             clean-vs-noisy constellation scatter plot.
+        y -- noisy received symbols (channel output / demapper input).
+             This is the actual feature tensor (X in the AMC/PyTorch
+             sense) an AMR model trains on.
+
+        bits/llr are still returned alongside x/y (not dropped), so a
+        single call can feed both the existing BER/BLER path and the
+        new AMR dataset export path without running the pipeline twice.
+        """
+        return self._generate_core(batch_size, num_symbols, ebno_db)
+
+    def generate_sweep_iq(self):
+        """
+        AMR counterpart to generate_sweep(): runs generate_iq() once
+        per Eb/No point in config.sweep.ebno_db, using
+        config.sweep.batch_size / num_symbols for every point (same
+        per-point looping behavior as generate_sweep(), including its
+        float-accumulation caveat on rng.step).
+
+        Returns a dict keyed by ebno_db value -> (bits, llr, x, y), so
+        export.py's AMR export path decides serialization rather than
+        this file picking one.
+        """
+
+        sweep = self.config.sweep
+        rng = sweep.ebno_db
+
+        results = {}
+
+        ebno_db = rng.start
+        while ebno_db <= rng.stop:
+            results[ebno_db] = self.generate_iq(
                 batch_size=sweep.batch_size,
                 num_symbols=sweep.num_symbols,
                 ebno_db=ebno_db,
