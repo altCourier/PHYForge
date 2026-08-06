@@ -2,7 +2,7 @@
 
 **One config file drives an entire Sionna physical-layer pipeline — source, mapping, channel, waveform, and sweep — with no code changes between experiments.**
 
-> Status: early design / planning stage. Schema and architecture are being drafted before implementation begins. Nothing in this README describes shipped functionality yet.
+> Status: Confirming dataset outputs
 
 ## Why
 
@@ -28,17 +28,69 @@ PHYSys is that glue code, written once, driven entirely by a single config file.
 
 Change `active_channel` from `"tdl"` to `"system_level"` (with `variant: "uma"` or `"rma"`), and PHYSys builds the right object graph for you — no code edits.
 
-## Who this is for
-
-Anyone using Sionna to run parameter sweeps for dataset generation, benchmarking, or reproducible experiment configs — particularly useful when you want to hand off or version-control *what a run was* without shipping a script.
-
-## Quick start
-
-> Installation and usage instructions will be added once the first implementation lands. Sionna PHY itself requires Python 3.11+ and PyTorch 2.9+.
-
 ## How it works (short version)
 
 `config.json`, at the repo root, holds every parameter for every supported channel and waveform at once. Two top-level fields — `active_channel` and `active_waveform` — name which blocks are actually used for a given run; everything else sits inert but ready. A builder layer reads the resolved config and constructs the matching Sionna object graph (e.g. `TDL` + `TimeChannel` for `active_channel: "tdl"`, vs. two `PanelArray`s + topology + `UMi`/`UMa`/`RMa` for `active_channel: "system_level"`). See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design.
+
+## Generating a dataset (Makefile)
+
+Each modulation lives in its own folder under `modulations/`, each with its own `config.json`:
+
+```
+modulations/
+├── BPSK/config.json
+├── QPSK/config.json
+├── 16-QAM/config.json
+├── 64-QAM/config.json
+├── 256-QAM/config.json
+└── 1024-QAM/config.json
+```
+
+A `Makefile` at the repo root wraps the underlying CLI call (`python -m physys.cli sweep -c config.json -o sweep.h5 --iq`) so you don't have to run it once per modulation by hand.
+
+**List available targets:**
+
+```bash
+make help
+```
+
+**Generate `sweep.h5` for every modulation:**
+
+```bash
+make dataset
+```
+
+This first runs `check-configs` to confirm every modulation folder actually has a `config.json`, then builds any `sweep.h5` that's missing or older than its config. Configs that haven't changed are skipped — only stale or missing outputs get regenerated.
+
+**Generate a single modulation:**
+
+```bash
+make BPSK
+```
+
+or equivalently:
+
+```bash
+make modulations/BPSK/sweep.h5
+```
+
+**Generate a specific subset without editing the Makefile:**
+
+```bash
+make dataset MODULATIONS="BPSK QPSK"
+```
+
+**Remove all generated `sweep.h5` files:**
+
+```bash
+make clean
+```
+
+You'll be shown which files would be deleted and asked to confirm before anything is removed.
+
+**Notes:**
+- Rebuilds are triggered by either the modulation's `config.json` changing or the CLI module (`physys/cli.py`) changing — not just by re-running `make`.
+- Sweeps run **serially** by default (`.NOTPARALLEL:` in the Makefile), since they're assumed to share a single GPU. If your setup doesn't have that constraint, remove that line and use `make -j4 dataset` to parallelize across modulations.
 
 ## Project origin
 
