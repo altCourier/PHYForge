@@ -107,36 +107,31 @@ def export_sweep(
     compression: str = "gzip",
 ) -> None:
     """
-    Write a `PHYSys.generate_sweep()` result ({ebno_db: (bits, llr)}) to one file.
- 
-    One HDF5 group per Eb/N0 point.
-    
+    Write a `PHYSys.generate_sweep()` result to contiguous multi-dimensional arrays.
     """
-
+    
     path = Path(path)
 
     path.parent.mkdir(parents=True, exist_ok=True)
- 
+
     ebno_values = sorted(results.keys())
- 
+
+    stacked_bits = np.stack([_to_numpy(results[ebno][0]) for ebno in ebno_values])
+    stacked_llr = np.stack([_to_numpy(results[ebno][1]) for ebno in ebno_values])
+    snr_labels = np.array(ebno_values, dtype=np.float64)
+
     with h5py.File(path, "w") as f:
 
         f.attrs["created_utc"] = _utc_timestamp()
-        f.attrs["ebno_db_points"] = np.array(ebno_values, dtype=np.float64)
-
+        
         cfg_json = _config_json(config)
 
         if cfg_json is not None:
             f.attrs["config_json"] = cfg_json
- 
-        for ebno_db in ebno_values:
-            
-            bits, llr = results[ebno_db]
 
-            grp = f.create_group(f"ebno_db={ebno_db:.4f}")
-            grp.attrs["ebno_db"] = float(ebno_db)
-            grp.create_dataset("bits", data=_to_numpy(bits), compression=compression)
-            grp.create_dataset("llr", data=_to_numpy(llr), compression=compression)
+        f.create_dataset("snr_labels", data=snr_labels)
+        f.create_dataset("bits", data=stacked_bits, compression=compression)
+        f.create_dataset("llr", data=stacked_llr, compression=compression)
  
  
 def load_run(path: Union[str, Path]) -> dict:
@@ -175,9 +170,13 @@ def load_sweep(path: Union[str, Path]) -> dict:
     results = {}
 
     with h5py.File(path, "r") as f:
-        for grp in f.values():
 
-            ebno_db = float(grp.attrs["ebno_db"])
-            results[ebno_db] = (grp["bits"][...], grp["llr"][...])
+        snr_labels = f["snr_labels"][...]
+        bits = f["bits"][...]
+        llr = f["llr"][...]
+
+        for i, snr in enumerate(snr_labels):
+
+            results[float(snr)] = (bits[i], llr[i])
 
     return results
