@@ -5,11 +5,13 @@ physys.cli
 Thin command-line entry point over the real pipeline:
 
     config.json -> load_config -> PHYSys -> generate()/generate_sweep() -> export
+    config.json -> load_config -> PHYSys -> generate_sweep_iq() -> export (--iq)
 
 Usage
 -----
     python -m physys.cli run    -c config.json -o run.h5   --ebno-db 5.0
     python -m physys.cli sweep  -c config.json -o sweep.h5
+    python -m physys.cli sweep  -c config.json -o sweep.h5 --iq
 """
 
 from __future__ import annotations
@@ -69,6 +71,26 @@ def run_sweep(config_path: Path, out_path: Path) -> Path:
     return out_path
 
 
+def run_sweep_iq(config_path: Path, out_path: Path) -> Path:
+    """
+    AMR counterpart to run_sweep(): load config, run
+    generate_sweep_iq() over config.sweep's Eb/N0 range (bits/llr/x/y
+    per point), export all points to `out_path` via export_sweep_iq()
+    -- same file also gets the "modulation" attr derived from
+    config.modulation.
+    """
+
+    config: Config = load_config(config_path)
+
+    sim = PHYSys(config)
+
+    results = sim.generate_sweep_iq()
+
+    export.export_sweep_iq(results, out_path, config=config)
+
+    return out_path
+
+
 # --------------------------------------------------------------------------- #
 # argparse shell
 # --------------------------------------------------------------------------- #
@@ -101,6 +123,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sweep_p.add_argument("-o", "--output", type=Path, required=True,
                           help="Output .h5 path")
 
+    sweep_p.add_argument("--iq", action="store_true",
+                          help="Also capture/export raw tx symbols (x) and rx symbols (y) "
+                               "for AMR dataset generation, via generate_sweep_iq()/"
+                               "export_sweep_iq() instead of the bits/llr-only path. "
+                               "Output file also gets a 'modulation' attr.")
+
     return parser
 
 
@@ -119,13 +147,26 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "sweep":
 
-            out_path = run_sweep(args.config, args.output)
+            if args.iq:
 
-            reloaded = export.load_sweep(out_path)
+                out_path = run_sweep_iq(args.config, args.output)
 
-            ebno_points = sorted(reloaded.keys())
+                reloaded = export.load_sweep_iq(out_path)
 
-            print(f"Wrote sweep ({len(ebno_points)} Eb/N0 points: {ebno_points}) -> {out_path}")
+                ebno_points = sorted(reloaded.keys())
+
+                print(f"Wrote IQ sweep ({len(ebno_points)} Eb/N0 points: {ebno_points}) "
+                      f"-> {out_path}")
+
+            else:
+
+                out_path = run_sweep(args.config, args.output)
+
+                reloaded = export.load_sweep(out_path)
+
+                ebno_points = sorted(reloaded.keys())
+
+                print(f"Wrote sweep ({len(ebno_points)} Eb/N0 points: {ebno_points}) -> {out_path}")
 
     except ConfigLoadError as e:
 
