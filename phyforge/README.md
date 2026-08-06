@@ -102,3 +102,28 @@ PHYSys grew out of wrapper classes (`Source`, `MapSys`, `Channel`, `PHYSys`) ori
 - [x] Builder layer for schema → Sionna object graph
 - [x] Sweep execution + dataset export
 - [x] Documentation + examples
+
+## Revised Roadmap
+
+### Phase 0 
+
+- [ ] Draft the OFDM-scope "question" issue
+- [ ] Resolve #28
+- [ ] Resolve #39
+
+### Phase 1  blockers, layout-independent
+- [ ] #32
+- [ ] #30
+- [ ] #25
+- [ ] #19
+
+### Phase 2  combination infrastructure 
+- [ ] Decide: append-mode in `export.py`, or a separate merge script that reads N per-modulation `sweep.h5` files and writes one scenario file?
+- [ ] #29
+- [ ] #31
+
+### Phase 3  scenario-first restructuring
+- [ ] Redesign `modulations/<MOD>/config.json` into a modulation x scenario matrix, update the Makefile accordingly, wire in the Phase 2 merge step per scenario
+
+### Phase 4  deferred, tracked via the question issue
+- [ ] #16 OFDM, and whatever #17/#19 turn into once OFDM is live
