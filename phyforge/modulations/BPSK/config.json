@@ -6,7 +6,7 @@
     "precision": "single",
     "device": null,
     
-    "active_channel": "system_level",
+    "active_channel": "awgn",
     "active_waveform": "time"
   },
 
@@ -20,8 +20,8 @@
 
   "modulation": {
 
-    "type": "qam",
-    "num_bits_per_symbol": 4,
+    "type": "pam",
+    "num_bits_per_symbol": 1,
 
     "mapper": {
       "return_indices": false

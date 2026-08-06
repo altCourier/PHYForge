@@ -21,7 +21,7 @@
   "modulation": {
 
     "type": "qam",
-    "num_bits_per_symbol": 4,
+    "num_bits_per_symbol": 2,
 
     "mapper": {
       "return_indices": false
