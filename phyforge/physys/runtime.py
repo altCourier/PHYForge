@@ -45,7 +45,7 @@ class PHYSys:
 
     Built once per Config -- source/mapper/demapper/channel/waveform
     don't change between calls; only batch_size/num_symbols/ebno_db
-    vary per generate()/generate_iq() call.
+    vary per generate() call.
     """
 
     def __init__(self, config: Config):
@@ -101,13 +101,6 @@ class PHYSys:
         AWGN's handle() (see build_waveform) is the identity passthrough
         for shape purposes -- it takes/returns [batch, num_symbols]
         directly, no reshape needed.
-
-        Whatever this returns is exactly what the demapper consumes
-        (see _generate_core below) -- i.e. this IS "y", the raw
-        received noisy symbol tensor an AMR model trains on. Nothing
-        downstream re-derives y independently, so llr and y (when
-        exposed via generate_iq()) are always consistent with each
-        other.
         """
 
         if isinstance(self._channel_model, AWGN):
