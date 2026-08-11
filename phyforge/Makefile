@@ -6,7 +6,14 @@ CLI_MODULE    :=  physys/cli.py
 
 SWEEP_OUTPUTS :=  $(foreach m,$(MODULATIONS),$(MOD_DIR)/$(m)/$(OUT_NAME))
 
-.PHONY: help dataset clean check-configs $(MODULATIONS)
+# AMR benchmark dataset (single config.json's amr_dataset block ->
+# Umi.h5/Uma.h5/Rma.h5, via `python -m physys.cli dataset`). Separate
+# from the per-modulation SWEEP_OUTPUTS above -- this is one config,
+# one command, three output files, not one-directory-per-modulation.
+AMR_OUT_DIR   :=  data
+AMR_OUTPUTS   :=  $(AMR_OUT_DIR)/Umi.h5 $(AMR_OUT_DIR)/Uma.h5 $(AMR_OUT_DIR)/Rma.h5
+
+.PHONY: help dataset amr-dataset clean clean-amr-dataset check-configs $(MODULATIONS)
 
 .DEFAULT_GOAL := help
 
@@ -33,7 +40,7 @@ check-configs: ## Verify every modulation has a config.json before running a swe
 	done; \
 	exit $$status
 
-dataset: check-configs $(SWEEP_OUTPUTS) ##  Generate sweep.h5 for all modulations
+dataset: check-configs $(SWEEP_OUTPUTS) ##  Generate sweep.h5 for all modulations (per-modulation directories)
 
 $(MOD_DIR)/%/$(OUT_NAME): $(MOD_DIR)/%/$(CONFIG_NAME) | $(CLI_MODULE)
 	@echo "==> Generating $@ from $<"
@@ -42,6 +49,19 @@ $(MOD_DIR)/%/$(OUT_NAME): $(MOD_DIR)/%/$(CONFIG_NAME) | $(CLI_MODULE)
 # Convenience per-modulation targets, e.g. `make BPSK`, `make QPSK`
 $(MODULATIONS): %: $(MOD_DIR)/%/$(OUT_NAME)
 
+amr-dataset: $(AMR_OUT_DIR)/.stamp ##  Generate Umi.h5/Uma.h5/Rma.h5 from config.json's amr_dataset block
+
+# Single stamp file, not per-output rules: `physys.cli dataset` writes
+# all three .h5 files in one process (one PHYSys build per modulation,
+# reused across that modulation's SNR sweep) -- there's no way to
+# regenerate just Uma.h5 without rerunning the whole thing anyway, so
+# a three-way pattern rule here would just be misleading.
+$(AMR_OUT_DIR)/.stamp: $(CONFIG_NAME) | $(CLI_MODULE)
+	@mkdir -p $(AMR_OUT_DIR)
+	@echo "==> Generating AMR dataset ($(AMR_OUTPUTS)) from $<"
+	python -m physys.cli dataset -c $< -o $(AMR_OUT_DIR)
+	@touch $@
+
 clean: ##  Remove all generated sweep.h5 files (asks for confirmation)
 	@echo "This will remove:"
 	@for f in $(SWEEP_OUTPUTS); do [ -f "$$f" ] && echo "  $$f"; done; true
@@ -49,6 +69,17 @@ clean: ##  Remove all generated sweep.h5 files (asks for confirmation)
 	if [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
 		rm -f $(SWEEP_OUTPUTS); \
 		echo "Removed all generated sweep.h5 files"; \
+	else \
+		echo "Aborted."; \
+	fi
+
+clean-amr-dataset: ##  Remove Umi.h5/Uma.h5/Rma.h5 (asks for confirmation)
+	@echo "This will remove:"
+	@for f in $(AMR_OUTPUTS) $(AMR_OUT_DIR)/.stamp; do [ -f "$$f" ] && echo "  $$f"; done; true
+	@read -p "Proceed? [y/N] " ans; \
+	if [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
+		rm -f $(AMR_OUTPUTS) $(AMR_OUT_DIR)/.stamp; \
+		echo "Removed AMR dataset files"; \
 	else \
 		echo "Aborted."; \
 	fi

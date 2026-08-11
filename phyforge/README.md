@@ -30,7 +30,9 @@ Change `active_channel` from `"tdl"` to `"system_level"` (with `variant: "uma"` 
 
 ## How it works (short version)
 
-`config.json`, at the repo root, holds every parameter for every supported channel and waveform at once. Two top-level fields — `active_channel` and `active_waveform` — name which blocks are actually used for a given run; everything else sits inert but ready. A builder layer reads the resolved config and constructs the matching Sionna object graph (e.g. `TDL` + `TimeChannel` for `active_channel: "tdl"`, vs. two `PanelArray`s + topology + `UMi`/`UMa`/`RMa` for `active_channel: "system_level"`). See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design.
+`config.json`, at the repo root, holds every parameter for every supported channel and waveform at once. Two top-level fields — `active_channel` and `active_waveform` — name which blocks are actually used for a given run; everything else sits inert but ready. A builder layer reads the resolved config and constructs the matching Sionna object graph (e.g. `TDL` + `TimeChannel` for `active_channel: "tdl"`, vs. two `PanelArray`s + topology + `UMi`/`UMa`/`RMa` for `active_channel: "system_level"`). 
+ * See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design. 
+ * Read API documentation from [README.md](/sionna-practice/phyforge/physys/README.md) 
 
 ## Generating a dataset (Makefile)
 
