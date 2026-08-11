@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+import json
 from pathlib import Path
 
 from physys.loader import ConfigLoadError, load_config
 from physys.runtime import PHYSys
 from physys.schema import Config
 from physys import export
+from physys import amr_dataset
 
 
 # --------------------------------------------------------------------------- #
@@ -91,6 +93,18 @@ def run_sweep_iq(config_path: Path, out_path: Path) -> Path:
     return out_path
 
 
+def run_dataset(config_path: Path, out_dir: Path) -> dict:
+    config: Config = load_config(config_path)
+
+    if config.amr_dataset is None:
+
+        raise ConfigLoadError(
+            f"{config_path} has no 'amr_dataset' block -- required for the 'dataset' command"
+        )
+
+    return amr_dataset.generate_all(config, out_dir)
+
+
 # --------------------------------------------------------------------------- #
 # argparse shell
 # --------------------------------------------------------------------------- #
@@ -128,6 +142,19 @@ def _build_parser() -> argparse.ArgumentParser:
                                "for AMR dataset generation, via generate_sweep_iq()/"
                                "export_sweep_iq() instead of the bits/llr-only path. "
                                "Output file also gets a 'modulation' attr.")
+
+    dataset_p = subparsers.add_parser(
+    "dataset",
+        help="Generate the AMR benchmark (Umi.h5/Uma.h5/Rma.h5): 6 modulations "
+            "x 16 SNR levels x 1024 vectors x 1024 complex samples each.",
+    )
+
+    dataset_p.add_argument("-c", "--config", type=Path, default=Path("config.json"),
+                            help="Template config.json (path/loss/shadowing/modulation "
+                                "fields are overridden per run)")
+
+    dataset_p.add_argument("-o", "--output", type=Path, required=True,
+                            help="Output directory for Umi.h5/Uma.h5/Rma.h5")
 
     return parser
 
@@ -167,6 +194,14 @@ def main(argv: list[str] | None = None) -> int:
                 ebno_points = sorted(reloaded.keys())
 
                 print(f"Wrote sweep ({len(ebno_points)} Eb/N0 points: {ebno_points}) -> {out_path}")
+
+        elif args.command == "dataset":
+
+            written = run_dataset(args.config, args.output)
+
+            for variant, path in written.items():
+
+                print(f"Wrote {variant} -> {path}")
 
     except ConfigLoadError as e:
 

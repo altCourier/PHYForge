@@ -15,6 +15,8 @@ Split of responsibility:
 
 import dataclasses
 
+import numpy as np
+
 import sionna.phy
 
 from sionna.phy.channel import AWGN, RayleighBlockFading, TimeChannel, OFDMChannel
@@ -170,12 +172,17 @@ def build_mapsys(config: Config):
 
     mod = config.modulation
 
+    points = mod.constellation.points
+
+    if points is not None:
+        points = np.array([complex(re, im) for re, im in points], dtype=np.complex64)
+
     constellation = Constellation(
         mod.type,
         mod.num_bits_per_symbol,
         normalize = mod.constellation.normalize,
         center = mod.constellation.center,
-        points = mod.constellation.points,
+        points = points,
     )
 
     mapper = Mapper(

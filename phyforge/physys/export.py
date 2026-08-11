@@ -32,8 +32,10 @@ from typing import Optional, Union
  
 import h5py
 import numpy as np
- 
- 
+
+_MOD_ORDER = ["BPSK", "QPSK", "16QAM", "64QAM", "256QAM", "1024QAM"]
+
+
 def _to_numpy(x):
     """
     Sionna/TensorFlow tensors, torch tensors, or already-ndarray -> ndarray.
@@ -425,3 +427,46 @@ def load_sweep_iq(path: Union[str, Path]) -> dict:
             results[float(snr)] = (bits[i], llr[i], x[i], y[i])
 
     return results
+
+def open_amr_dataset(path, mod_order: list, vector_len=1024, compression="gzip"):
+    """
+    Create a new resizable AMR dataset file with Data/Mods/SNRs datasets.
+    Returns the open h5py.File -- caller must close() it.
+    Data: complex64 [N, vector_len]
+    Mods: float32 one-hot [N, len(_MOD_ORDER)]
+    SNRs: float32 [N]
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    f = h5py.File(path, "w")
+    f.create_dataset("Data", shape=(0, vector_len), maxshape=(None, vector_len),
+                      dtype=np.complex64, compression=compression, chunks=(1024, vector_len))
+    f.create_dataset("Mods", shape=(0, len(_MOD_ORDER)), maxshape=(None, len(_MOD_ORDER)),
+                      dtype=np.float32, compression=compression, chunks=(1024, len(_MOD_ORDER)))
+    f.create_dataset("SNRs", shape=(0,), maxshape=(None,),
+                      dtype=np.float32, compression=compression, chunks=(1024,))
+    f.attrs["created_utc"] = _utc_timestamp()
+    f.attrs["mod_order"] = json.dumps(mod_order)
+    return f
+
+def append_amr_batch(f, y, mod_index: int, snr_db: float):
+    """
+    Append one (modulation, snr) batch of received vectors to an open
+    AMR dataset file (from open_amr_dataset). y is [batch, vector_len]
+    complex, one row per vector.
+    """
+    y_np = _to_numpy(y).astype(np.complex64)
+    n = y_np.shape[0]
+    num_mods = f["Mods"].shape[1]
+
+    mods_onehot = np.zeros((n, num_mods), dtype=np.float32)
+    mods_onehot[:, mod_index] = 1.0
+
+    snrs = np.full((n,), snr_db, dtype=np.float32)
+
+    for name, chunk in (("Data", y_np), ("Mods", mods_onehot), ("SNRs", snrs)):
+        ds = f[name]
+        old_len = ds.shape[0]
+        ds.resize(old_len + n, axis=0)
+        ds[old_len:old_len + n] = chunk

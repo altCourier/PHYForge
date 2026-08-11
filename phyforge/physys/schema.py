@@ -63,17 +63,35 @@ class ConstellationConfig:
 
 @dataclass
 class ModulationConfig:
-    type: Literal["qam", "pam"]
+
+    type: Literal["qam", "pam", "custom"]
+
     num_bits_per_symbol: int
+
     mapper: MapperConfig
     demapper: DemapperConfig
     constellation: ConstellationConfig
 
     def __post_init__(self):
-        if self.type not in ("qam", "pam"):
-            raise ValueError(f"ModulationConfig.type must be 'qam' or 'pam', got {self.type!r}")
+        if self.type not in ("qam", "pam", "custom"):
+            raise ValueError(f"ModulationConfig.type must be 'qam'/'pam'/'custom', got {self.type!r}")
+        
         if not isinstance(self.num_bits_per_symbol, int):
             raise ValueError("num_bits_per_symbol must be an integer")
+
+        if self.type == "qam" and self.num_bits_per_symbol % 2 != 0:
+            raise ValueError(
+                f"type='qam' requires an even num_bits_per_symbol "
+                f"(QAM is built from two independent PAM arms on I/Q), got {self.num_bits_per_symbol}. "
+                f"Use type='custom' for odd orders like BPSK."
+            )
+
+        if self.type == "custom":
+
+            pts = self.constellation.points
+
+            if pts is None:
+                raise ValueError("type='custom' requires constellation.points to be set")
 
 # ---- channels ----
 
@@ -258,6 +276,59 @@ class SweepConfig:
     batch_size: int
     num_symbols: int
 
+# ---- AMR specific ----
+
+@dataclass
+class AmrModulationSpec:
+    name: str
+    type: Literal["qam", "pam", "custom"]
+    num_bits_per_symbol: int
+    constellation: ConstellationConfig
+
+    def to_modulation_config(self, mapper: MapperConfig, demapper: DemapperConfig) -> ModulationConfig:
+        # Reuses ModulationConfig's own __post_init__ validation (even-bits-for-qam,
+        # points-required-for-custom) -- no validation logic duplicated here.
+        return ModulationConfig(
+            type = self.type,
+            num_bits_per_symbol = self.num_bits_per_symbol,
+            mapper = mapper,
+            demapper = demapper,
+            constellation = self.constellation,
+        )
+
+
+@dataclass
+class AmrDatasetConfig:
+    variants: List[Literal["umi", "uma", "rma"]]
+    snr_db: EbNoRangeConfig
+    num_vectors: int
+    vector_len: int
+    mapper: MapperConfig
+    demapper: DemapperConfig
+    modulations: List[AmrModulationSpec]
+
+    # Upper bound on batch_size per generate_iq() call. num_vectors is
+    # produced by looping smaller sub-batches and concatenating, not
+    # necessarily in one forward pass -- the demapper's "app" method
+    # materializes a [batch, vector_len, num_points] tensor, which for
+    # high-order modulations (e.g. 1024QAM: num_points=1024) can exceed
+    # available GPU memory well before num_vectors=1024 is reached.
+    # None -> no chunking, one call of batch_size=num_vectors (previous behavior).
+    max_batch_size: Optional[int] = None
+
+    disable_pathloss_and_shadowing: bool = True
+
+    def __post_init__(self):
+        if not self.modulations:
+            raise ValueError("amr_dataset.modulations must not be empty")
+        names = [m.name for m in self.modulations]
+        if len(names) != len(set(names)):
+            raise ValueError(f"amr_dataset.modulations names must be unique, got {names}")
+        for v in self.variants:
+            if v not in ("umi", "uma", "rma"):
+                raise ValueError(f"amr_dataset.variants entries must be 'umi'/'uma'/'rma', got {v!r}")
+        if self.max_batch_size is not None and self.max_batch_size <= 0:
+            raise ValueError(f"amr_dataset.max_batch_size must be > 0, got {self.max_batch_size!r}")
 
 # ---- top level ----
 
@@ -273,32 +344,27 @@ class Config:
 
     sweep: SweepConfig
 
+    amr_dataset: Optional[AmrDatasetConfig] = None
+
     def __post_init__(self):
 
-        # Derive valid names directly from ChannelsConfig/WaveformsConfig's
-        # field names, rather than hand-typing a parallel list that can
-        # drift out of sync with the dataclasses themselves.
         valid_channels = tuple(f.name for f in dataclasses.fields(ChannelsConfig))
         valid_waveforms = tuple(f.name for f in dataclasses.fields(WaveformsConfig))
 
         if self.common.active_channel not in valid_channels:
-
             raise ValueError(
                 f"active_channel must be one of {valid_channels}, "
                 f"got {self.common.active_channel!r}"
             )
-        
-        if self.common.active_waveform not in valid_waveforms:
 
+        if self.common.active_waveform not in valid_waveforms:
             raise ValueError(
                 f"active_waveform must be one of {valid_waveforms}, "
                 f"got {self.common.active_waveform!r}"
             )
 
         if (self.common.active_waveform == "time"
-            
             and self.sweep.num_symbols != self.waveforms.time.num_time_samples):
-
             raise ValueError(
                 f"sweep.num_symbols ({self.sweep.num_symbols}) must equal "
                 f"waveforms.time.num_time_samples ({self.waveforms.time.num_time_samples}) "
@@ -401,4 +467,34 @@ def parse_config(raw: dict) -> Config:
         channels = parse_channels(raw["channels"]),
         waveforms = parse_waveforms(raw["waveforms"]),
         sweep = parse_sweep(raw["sweep"]),
+        amr_dataset = parse_amr_dataset(raw.get("amr_dataset")),
+    )
+
+def parse_amr_modulation(raw: dict) -> AmrModulationSpec:
+    raw = _strip_comments(raw)
+    return AmrModulationSpec(
+        name = raw["name"],
+        type = raw["type"],
+        num_bits_per_symbol = raw["num_bits_per_symbol"],
+        constellation = ConstellationConfig(**_strip_comments(raw.get("constellation", {}))),
+    )
+
+
+def parse_amr_dataset(raw: Optional[dict]) -> Optional[AmrDatasetConfig]:
+
+    if raw is None:
+        return None
+    
+    raw = _strip_comments(raw)
+
+    return AmrDatasetConfig(
+        variants = raw["variants"],
+        snr_db = EbNoRangeConfig(**raw["snr_db"]),
+        num_vectors = raw["num_vectors"],
+        vector_len = raw["vector_len"],
+        max_batch_size = raw.get("max_batch_size"),
+        disable_pathloss_and_shadowing = raw.get("disable_pathloss_and_shadowing", True),
+        mapper = MapperConfig(**_strip_comments(raw.get("mapper", {}))),
+        demapper = DemapperConfig(**_strip_comments(raw.get("demapper", {}))),
+        modulations = [parse_amr_modulation(m) for m in raw["modulations"]],
     )
