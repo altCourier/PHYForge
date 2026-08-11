@@ -20,7 +20,7 @@
 
   "modulation": {
 
-    "type": "pam",
+    "type": "custom",
     "num_bits_per_symbol": 1,
 
     "mapper": {
@@ -36,7 +36,7 @@
       "_comment": "normalize/center/points only apply if type were 'custom' -- unused for qam.",
       "normalize": false,
       "center": false,
-      "points": null
+      "points": [[-1.0, 0.0], [1.0, 0.0]]
     }
   },
 
@@ -153,7 +153,7 @@
 
   "sweep": {
     "ebno_db": { "start": -10, "stop": 10, "step": 2 },
-    "batch_size": 4,
+    "batch_size": 1,
     "num_symbols": 1024
   }
 }

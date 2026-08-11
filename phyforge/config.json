@@ -155,5 +155,48 @@
     "ebno_db": { "start": -10, "stop": 10, "step": 2 },
     "batch_size": 4,
     "num_symbols": 1024
+  },
+
+  "amr_dataset": {
+
+    "variants": ["umi", "uma", "rma"],
+
+    "snr_db": { "start": -10, "stop": 20, "step": 2 },
+
+    "num_vectors": 1024,
+    "vector_len": 1024,
+
+    "max_batch_size": 64,
+
+    "disable_pathloss_and_shadowing": true,
+
+    "mapper": { "return_indices": false },
+
+    "demapper": { "hard_out": false, "demapping_method": "app" },
+
+    "modulations": [
+
+      { "name": "BPSK",    "type": "custom", "num_bits_per_symbol": 1,
+        "constellation": { "normalize": false, "center": false,
+          "points": [[-1.0, 0.0], [1.0, 0.0]] } },
+
+      { "name": "QPSK",    "type": "custom", "num_bits_per_symbol": 2,
+        "constellation": { "normalize": false, "center": false,
+          "points": [[0.70710678, 0.70710678], [0.70710678, -0.70710678],
+                      [-0.70710678, 0.70710678], [-0.70710678, -0.70710678]] } },
+
+      { "name": "16QAM",   "type": "qam", "num_bits_per_symbol": 4,
+        "constellation": { "normalize": false, "center": false, "points": null } },
+
+      { "name": "64QAM",   "type": "qam", "num_bits_per_symbol": 6,
+        "constellation": { "normalize": false, "center": false, "points": null } },
+
+      { "name": "256QAM",  "type": "qam", "num_bits_per_symbol": 8,
+        "constellation": { "normalize": false, "center": false, "points": null } },
+        
+      { "name": "1024QAM", "type": "qam", "num_bits_per_symbol": 10,
+        "constellation": { "normalize": false, "center": false, "points": null } }
+    ]
   }
+
 }

@@ -20,7 +20,7 @@
 
   "modulation": {
 
-    "type": "qam",
+    "type": "custom",
     "num_bits_per_symbol": 2,
 
     "mapper": {
@@ -36,7 +36,7 @@
       "_comment": "normalize/center/points only apply if type were 'custom' -- unused for qam.",
       "normalize": false,
       "center": false,
-      "points": null
+      "points": [[0.7071, 0.7071], [0.7071, -0.7071], [-0.7071, 0.7071], [-0.7071, -0.7071]]
     }
   },
 
