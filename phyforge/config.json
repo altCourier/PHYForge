@@ -83,6 +83,9 @@
       "enable_pathloss": true,
       "enable_shadow_fading": true,
 
+      "average_street_width": 20.0,
+      "average_building_height": 5.0,
+
       "bs_array": {
         "num_rows_per_panel": 1,
         "num_cols_per_panel": 1,

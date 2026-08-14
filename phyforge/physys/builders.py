@@ -138,13 +138,12 @@ def build_channel(config: Config):
         if channel_config.variant in ("umi", "uma"):
             kwargs["o2i_model"] = channel_config.o2i_model
 
+        elif channel_config.variant == "rma":
+            kwargs["average_street_width"] = channel_config.average_street_width
+            kwargs["average_building_height"] = channel_config.average_building_height
+
         kwargs.update(_pd_kwargs(channel_config, common))
 
-        # TODO: gen_single_sector_topology (per ARCHITECTURE.md) still
-        # needs to be called and its output fed to
-        # variant_instance.set_topology(...) before this channel is
-        # usable. That's a runtime concern (topology may change per
-        # batch), so it likely belongs in runtime.py, not here.
         return variant_cls(**kwargs)
 
     if isinstance(channel_config, RayleighBlockFadingConfig):

@@ -163,6 +163,9 @@ class SystemLevelChannelConfig:
     enable_pathloss: bool = True
     enable_shadow_fading: bool = True
 
+    average_street_width: float = 20.0
+    average_building_height: float = 5.0
+
     bs_array: PanelArrayConfig = field(default_factory=PanelArrayConfig)
     ut_array: PanelArrayConfig = field(
         default_factory=lambda: PanelArrayConfig(antenna_pattern="omni")
@@ -175,6 +178,16 @@ class SystemLevelChannelConfig:
         if self.variant not in ("umi", "uma", "rma"):
             raise ValueError(
                 f"SystemLevelChannelConfig.variant must be 'umi'/'uma'/'rma', got {self.variant!r}"
+            )
+
+        if self.average_street_width <= 0:
+            raise ValueError(
+                f"average_street_width must be > 0, got {self.average_street_width!r}"
+            )
+        
+        if self.average_building_height <= 0:
+            raise ValueError(
+                f"average_building_height must be > 0, got {self.average_building_height!r}"
             )
 
 
