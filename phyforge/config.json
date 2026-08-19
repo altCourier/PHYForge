@@ -75,7 +75,7 @@
       
       "variant": "umi",
 
-      "carrier_frequency": 1.4e11,
+      "carrier_frequency": 3.5e9,
 
       "o2i_model": "low",
       "direction": "downlink",
@@ -181,12 +181,12 @@
 
       { "name": "BPSK",    "type": "custom", "num_bits_per_symbol": 1,
         "constellation": { "normalize": false, "center": false,
-          "points": [[-1.0, 0.0], [1.0, 0.0]] } },
+          "points": [[0.7071, 0.7071], [-0.7071, -0.7071]] } },
 
       { "name": "QPSK",    "type": "custom", "num_bits_per_symbol": 2,
         "constellation": { "normalize": false, "center": false,
-          "points": [[0.70710678, 0.70710678], [0.70710678, -0.70710678],
-                      [-0.70710678, 0.70710678], [-0.70710678, -0.70710678]] } },
+          "points": [[0.7071, 0.7071], [0.7071, -0.7071],
+                      [-0.7071, 0.7071], [-0.7071, -0.7071]] } },
 
       { "name": "16QAM",   "type": "qam", "num_bits_per_symbol": 4,
         "constellation": { "normalize": false, "center": false, "points": null } },
