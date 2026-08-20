@@ -2,8 +2,6 @@
 
 **One config file drives an entire Sionna physical-layer pipeline — source, mapping, channel, waveform, and sweep — with no code changes between experiments.**
 
-> Status: Confirming dataset outputs
-
 ## Why
 
 [Sionna](https://github.com/NVlabs/sionna) gives you the building blocks for PHY-layer simulation — sources, mappers, channel models, FEC — but every project ends up writing the same kind of glue code to wire them together: instantiate a source, instantiate a mapper, instantiate a channel, run a sweep. That glue code tends to be rewritten per-project, and switching something fundamental (e.g. an AWGN link to a 3GPP multipath model) usually means editing several files, not one.
