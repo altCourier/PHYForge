@@ -117,7 +117,12 @@ class PHYSys:
             batch_size = x.shape[0]
             x_time = tf_reshape_for_time_channel(x, batch_size, num_tx_ant)
 
-            y_time = self._handle(x_time, no)
+            wf_cfg = self.config.waveforms.time
+            if wf_cfg.return_channel:
+                y_time, h_time = self._handle(x_time, no)
+                self._last_h_time = h_time  # diagnostic stash, remove once equalizer lands
+            else:
+                y_time = self._handle(x_time, no)
 
             # TimeChannel's output is l_max - l_min samples LONGER than
             # its input (ARCHITECTURE.md Open Question 1). Default:
