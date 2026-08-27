@@ -6,14 +6,20 @@ Source -> Map -> Channel -> Demap pipeline from ARCHITECTURE.md's
 pipeline diagram.
 
 This file is where two of ARCHITECTURE.md's OPEN QUESTIONS stop being
-hypothetical, since generate() can't run without *some* answer. Both
-are given a provisional default here, flagged loudly, NOT quietly
-resolved -- they should still be argued with:
+hypothetical, since generate() can't run without *some* answer.
 
-1. TDL filter-tail handling (Open Question 1). Default here:
-   TRUNCATE the TimeChannel output back to num_time_samples. This is
-   the "simple but discards energy from the last few symbols" option
-   the doc names, not a considered pick. See _apply_time_channel().
+1. TDL filter-tail handling (Open Question 1) -- RESOLVED. TimeChannel's
+   output index b runs from l_min to num_symbols + l_max - 1 (array
+   position 0 is b = l_min, not b = 0 -- see the TimeChannel docstring).
+   _apply_time_channel() slices the aligned window
+   y_time[-l_min : -l_min + num_symbols], not [:num_symbols]: taking
+   [:num_symbols] kept -l_min samples of pure zero-padded ramp-up at
+   the front (not real channel output at all), shifted every other
+   returned sample's alignment with x by -l_min positions, and dropped
+   the last -l_min samples of genuinely valid response. The aligned
+   window fixes the misalignment and, as a side effect, the previously
+   flagged tail-energy loss (both ends now drop only the genuinely
+   invalid boundary samples, symmetrically).
 
 2. system_level topology (implicit open question -- not numbered in
    the doc, but required to make UMi/UMa/RMa usable at all). Default
@@ -119,12 +125,13 @@ class PHYSys:
 
             y_time = self._handle(x_time, no)
 
-            # TimeChannel's output is l_max - l_min samples LONGER than
-            # its input (ARCHITECTURE.md Open Question 1). Default:
-            # truncate back to num_symbols. This silently discards
-            # energy belonging to the last few symbols -- the doc
-            # flags this tradeoff explicitly, it isn't fixed here.
-            y = y_time[..., :num_symbols]
+            # TimeChannel's output index b runs from l_min to
+            # num_symbols + l_max - 1 (array position 0 is b = l_min),
+            # so the window aligned with x[0 .. num_symbols-1] starts
+            # at array position -l_min, not 0. See module docstring,
+            # Open Question 1.
+            offset = -self._handle.l_min
+            y = y_time[..., offset:offset + num_symbols]
             return y.reshape([batch_size, num_symbols])
 
         if self.config.common.active_waveform == "ofdm":

@@ -253,15 +253,21 @@ def test_tdl_time_channel_output_length_before_truncation():
     assert y_time.shape[-1] == NUM_SYMBOLS + (l_max - l_min)
 
 
-def test_truncation_keeps_first_num_symbols_not_last(monkeypatch):
+def test_truncation_keeps_offset_aligned_window(monkeypatch):
     """
     Isolates JUST the truncation slicing logic from real (noisy,
     random-fading) TDL output, by replacing PHYSys._handle on this one
     instance with a fake that returns a position-marker tensor
     (0, 1, 2, ...) of exactly the length a real TimeChannel would
-    produce. If _apply_time_channel kept the LAST num_symbols instead
-    of the first, y[0] would be arange(length-num_symbols, length)
-    instead of arange(0, num_symbols) -- this test would catch that.
+    produce.
+
+    TimeChannel's output index b runs from l_min to
+    num_symbols + l_max - 1, i.e. array position 0 is b = l_min, not
+    b = 0 (see its docstring). The window aligned with
+    x[0 .. num_symbols-1] therefore starts at array position -l_min,
+    not at 0 (the old, unaligned choice -- see runtime.py's module
+    docstring, Open Question 1) and not at the end either. This test
+    would catch a regression to either of those.
     """
     config = _config(active_channel="tdl", active_waveform="time", num_symbols=NUM_SYMBOLS)
     system = PHYSys(config)
@@ -269,10 +275,13 @@ def test_truncation_keeps_first_num_symbols_not_last(monkeypatch):
     l_min = system._handle.l_min
     l_max = system._handle.l_max
     full_length = NUM_SYMBOLS + (l_max - l_min)
+    offset = -l_min
 
     def fake_handle(x_time, no):
         marker = torch.arange(full_length, dtype=torch.float32)
         return marker.reshape([1, 1, 1, full_length]).expand(BATCH_SIZE, 1, 1, full_length).clone()
+
+    fake_handle.l_min = l_min  # _apply_time_channel reads self._handle.l_min
 
     monkeypatch.setattr(system, "_handle", fake_handle)
 
@@ -284,7 +293,7 @@ def test_truncation_keeps_first_num_symbols_not_last(monkeypatch):
     y = system._apply_time_channel(x, no, NUM_SYMBOLS)
 
     assert y.shape == (BATCH_SIZE, NUM_SYMBOLS)
-    assert torch.equal(y[0], torch.arange(NUM_SYMBOLS, dtype=torch.float32))
+    assert torch.equal(y[0], torch.arange(offset, offset + NUM_SYMBOLS, dtype=torch.float32))
 
 
 # ---------------------------------------------------------------------------
