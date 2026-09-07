@@ -93,6 +93,8 @@ class PHYSys:
             batch_size=batch_size,
             num_ut=1,
             scenario=channel_config.variant,
+            min_ut_velocity=0.0,
+            max_ut_velocity=0.0,
         )
         self._channel_model.set_topology(*topology)
 
