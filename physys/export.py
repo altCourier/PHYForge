@@ -442,8 +442,8 @@ def open_amr_dataset(path, mod_order: list, vector_len=1024, compression="gzip")
     f = h5py.File(path, "w")
     f.create_dataset("Data", shape=(0, vector_len), maxshape=(None, vector_len),
                       dtype=np.complex64, compression=compression, chunks=(1024, vector_len))
-    f.create_dataset("Mods", shape=(0, len(_MOD_ORDER)), maxshape=(None, len(_MOD_ORDER)),
-                      dtype=np.float32, compression=compression, chunks=(1024, len(_MOD_ORDER)))
+    f.create_dataset("Mods", shape=(0, len(mod_order)), maxshape=(None, len(mod_order)),
+                      dtype=np.float32, compression=compression, chunks=(1024, len(mod_order)))
     f.create_dataset("SNRs", shape=(0,), maxshape=(None,),
                       dtype=np.float32, compression=compression, chunks=(1024,))
     f.attrs["created_utc"] = _utc_timestamp()
