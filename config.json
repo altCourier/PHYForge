@@ -121,7 +121,7 @@
 
       "_comment": "Channel model is intentionally absent here. TimeChannel(channel_model, ...) takes the already-built channel object (the output of build_channel()) as its first positional argument at runtime -- it's how build_channel() and build_waveform() wire together, not a config value. no (noise power) is likewise computed at runtime, never stored here.",
       
-      "bandwidth": 1e6,
+      "bandwidth": 200e3,
       "num_time_samples": 1024,
       "maximum_delay_spread": 3e-6,
 
@@ -149,7 +149,7 @@
         "pilot_ofdm_symbol_indices": [2, 11]
       },
 
-      "normalize_channel": false,
+      "normalize_channel": true,
       "return_channel": false
     }
   },
